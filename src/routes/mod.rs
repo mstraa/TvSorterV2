@@ -11,12 +11,12 @@ use crate::assets::static_handler;
 use crate::db::ImportRow;
 use crate::error::{AppError, AppResult};
 use crate::filesystem::{
-    canonical_or_normalized, expand_source_files, expand_video_files, is_relative_to, list_directory,
+    canonical_or_normalized, expand_grouped, expand_source_files, is_relative_to, list_directory,
 };
 use crate::formatting::human_file_size;
 use crate::importer::{preview_import, ImportRequest};
 use crate::models::*;
-use crate::parser::{parse_film_filename, parse_media_filename, ParsedMedia};
+use crate::parser::{parse_film_filename, ParsedMedia};
 use crate::providers::{EpisodeCandidate, ShowCandidate};
 use crate::state::{is_valid_media_type, AppState, PICKER_ROOTS};
 
@@ -311,61 +311,54 @@ async fn match_route(
     let media_type = payload.media_type.clone();
     let root_path = PathBuf::from(&root.path);
     let selected = payload.selected.clone();
-    let files = tokio::task::spawn_blocking(move || expand_video_files(&root_path, &selected))
+    let groups = tokio::task::spawn_blocking(move || expand_grouped(&root_path, &selected))
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| AppError::bad_request(e.to_string()))?;
 
-    let mut rows = Vec::new();
     let mut search_cache: HashMap<String, Vec<ShowCandidate>> = HashMap::new();
     let mut episode_cache: HashMap<String, Vec<EpisodeCandidate>> = HashMap::new();
-    let mut film_cache: HashMap<String, Enriched> = HashMap::new();
+    let mut out_groups: Vec<MatchGroup> = Vec::new();
 
-    for file in files {
-        let mut parsed = if media_type == "film" {
-            parse_film_filename(&file)
-        } else {
-            parse_media_filename(&file)
-        };
-
-        // Close the ffprobe quality-fallback gap.
-        if parsed.quality == "Unknown" {
-            let probe_path = file.clone();
-            if let Ok(Some(quality)) =
-                tokio::task::spawn_blocking(move || crate::ffprobe::probe_quality(&probe_path)).await
-            {
-                parsed.quality = quality;
+    for group in groups {
+        if media_type == "film" {
+            // Films carry their identity in the filename; one group per file.
+            for gfile in group.files {
+                let mut parsed = parse_film_filename(&gfile.path);
+                parsed.quality = probe_quality_fallback(&gfile.path, &parsed.quality).await;
+                let enriched = enrich_film(&state, &parsed, &mut search_cache).await;
+                out_groups.push(MatchGroup {
+                    group_key: gfile.path.to_string_lossy().to_string(),
+                    group_name: parsed.source_name.clone(),
+                    show_title: enriched.show_title,
+                    show_year: enriched.show_year,
+                    provider: enriched.provider,
+                    provider_show_id: enriched.provider_show_id,
+                    candidates: enriched.candidates,
+                    metadata_error: enriched.metadata_error,
+                    episodes: vec![MatchEpisode {
+                        source_path: gfile.path.to_string_lossy().to_string(),
+                        source_name: parsed.source_name.clone(),
+                        season_number: 0,
+                        episode_number: 0,
+                        episode_title: "Film".to_string(),
+                        quality: parsed.quality.clone(),
+                        parsed,
+                    }],
+                });
             }
+        } else {
+            out_groups.push(
+                enrich_group(
+                    &state,
+                    &media_type,
+                    group,
+                    &mut search_cache,
+                    &mut episode_cache,
+                )
+                .await,
+            );
         }
-
-        let enriched = if media_type == "film" {
-            let cache_key = format!("{}|{:?}", parsed.title.to_lowercase(), parsed.year);
-            if let Some(cached) = film_cache.get(&cache_key) {
-                cached.clone()
-            } else {
-                let value = enrich_film(&state, &parsed, &mut search_cache).await;
-                film_cache.insert(cache_key, value.clone());
-                value
-            }
-        } else {
-            enrich(&state, &parsed, &media_type, &mut search_cache, &mut episode_cache).await
-        };
-
-        rows.push(MatchRow {
-            source_path: file.to_string_lossy().to_string(),
-            source_name: parsed.source_name.clone(),
-            show_title: enriched.show_title,
-            show_year: enriched.show_year,
-            season_number: parsed.season,
-            episode_number: parsed.episode,
-            episode_title: enriched.episode_title,
-            quality: parsed.quality.clone(),
-            provider: enriched.provider,
-            provider_show_id: enriched.provider_show_id,
-            candidates: enriched.candidates,
-            metadata_error: enriched.metadata_error,
-            parsed,
-        });
     }
 
     Ok(Json(MatchResponse {
@@ -373,95 +366,131 @@ async fn match_route(
         output_root: state
             .output_root_for(&media_type)
             .map(|p| p.to_string_lossy().to_string()),
-        rows,
+        groups: out_groups,
     }))
+}
+
+/// Resolve quality via ffprobe for a single file when the filename lacked a token.
+async fn probe_quality_fallback(path: &Path, current: &str) -> String {
+    if current != "Unknown" {
+        return current.to_string();
+    }
+    let probe_path = path.to_path_buf();
+    match tokio::task::spawn_blocking(move || crate::ffprobe::probe_quality(&probe_path)).await {
+        Ok(Some(quality)) => quality,
+        _ => current.to_string(),
+    }
 }
 
 #[derive(Clone)]
 struct Enriched {
     show_title: String,
     show_year: Option<i64>,
-    episode_title: String,
     provider: String,
     provider_show_id: String,
     candidates: Vec<ShowCandidate>,
     metadata_error: Option<String>,
 }
 
-async fn enrich(
+/// Match a whole folder to one show: one provider search + one episode fetch,
+/// then map every file in the group to a season/episode/title.
+async fn enrich_group(
     state: &AppState,
-    parsed: &ParsedMedia,
     media_type: &str,
+    group: crate::filesystem::FileGroup,
     search_cache: &mut HashMap<String, Vec<ShowCandidate>>,
     episode_cache: &mut HashMap<String, Vec<EpisodeCandidate>>,
-) -> Enriched {
-    let fallback = Enriched {
-        show_title: parsed.title.clone(),
-        show_year: parsed.year,
-        episode_title: parsed.episode_title.clone(),
-        provider: String::new(),
-        provider_show_id: String::new(),
-        candidates: Vec::new(),
-        metadata_error: None,
-    };
+) -> MatchGroup {
+    let (folder_title, folder_year) = crate::parser::show_title_from_folder(&group.group_name);
 
-    let candidates = match search_cache.get(&parsed.title) {
-        Some(cached) => cached.clone(),
-        None => match state.providers.search(media_type, &parsed.title).await {
+    // One search for the whole folder.
+    let search_result = match search_cache.get(&folder_title) {
+        Some(cached) => Ok(cached.clone()),
+        None => match state.providers.search(media_type, &folder_title).await {
             Ok(found) => {
-                search_cache.insert(parsed.title.clone(), found.clone());
-                found
+                search_cache.insert(folder_title.clone(), found.clone());
+                Ok(found)
             }
-            Err(err) => {
-                return Enriched {
-                    metadata_error: Some(err.user_message()),
-                    ..fallback
-                };
-            }
+            Err(err) => Err(err.user_message()),
         },
     };
 
-    if candidates.is_empty() {
-        return fallback;
-    }
-    let selected = candidates[0].clone();
-    let episode_key = format!("{}:{}", media_type, selected.provider_id);
-    let episodes = match episode_cache.get(&episode_key) {
-        Some(cached) => cached.clone(),
-        None => match state.providers.episodes(media_type, &selected.provider_id).await {
-            Ok(found) => {
-                episode_cache.insert(episode_key, found.clone());
-                found
+    let (candidates, metadata_error) = match search_result {
+        Ok(found) => (found, None),
+        Err(message) => (Vec::new(), Some(message)),
+    };
+    let selected = candidates.first().cloned();
+
+    // One episode fetch for the selected show.
+    let episodes = match &selected {
+        Some(candidate) => {
+            let key = format!("{}:{}", media_type, candidate.provider_id);
+            match episode_cache.get(&key) {
+                Some(cached) => cached.clone(),
+                None => match state.providers.episodes(media_type, &candidate.provider_id).await {
+                    Ok(found) => {
+                        episode_cache.insert(key, found.clone());
+                        found
+                    }
+                    Err(_) => Vec::new(),
+                },
             }
-            Err(_) => Vec::new(),
-        },
+        }
+        None => Vec::new(),
     };
 
-    // Prefer an exact season+episode match; for anime (one MAL entry per
-    // season) fall back to matching by episode number alone.
-    let mut episode_title = parsed.episode_title.clone();
-    if let Some(found) = episodes
-        .iter()
-        .find(|e| e.season == parsed.season && e.episode == parsed.episode)
-        .or_else(|| {
-            if media_type == "anime" {
-                episodes.iter().find(|e| e.episode == parsed.episode)
-            } else {
-                None
-            }
-        })
-    {
-        episode_title = found.title.clone();
+    let show_title = selected
+        .as_ref()
+        .map(|c| c.title.clone())
+        .unwrap_or_else(|| folder_title.clone());
+    let show_year = selected.as_ref().and_then(|c| c.year).or(folder_year);
+
+    let mut out_episodes = Vec::new();
+    for gfile in &group.files {
+        let segments: Vec<&str> = gfile
+            .relative_segments
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let season_hint = crate::parser::season_from_segments(&segments);
+        let mut parsed =
+            crate::parser::parse_folder_episode(&gfile.path, &show_title, season_hint);
+        parsed.quality = probe_quality_fallback(&gfile.path, &parsed.quality).await;
+
+        let episode_title = episodes
+            .iter()
+            .find(|e| e.season == parsed.season && e.episode == parsed.episode)
+            .or_else(|| {
+                if media_type == "anime" {
+                    episodes.iter().find(|e| e.episode == parsed.episode)
+                } else {
+                    None
+                }
+            })
+            .map(|e| e.title.clone())
+            .unwrap_or_else(|| parsed.episode_title.clone());
+
+        out_episodes.push(MatchEpisode {
+            source_path: gfile.path.to_string_lossy().to_string(),
+            source_name: parsed.source_name.clone(),
+            season_number: parsed.season,
+            episode_number: parsed.episode,
+            episode_title,
+            quality: parsed.quality.clone(),
+            parsed,
+        });
     }
 
-    Enriched {
-        show_title: selected.title,
-        show_year: selected.year.or(parsed.year),
-        episode_title,
-        provider: selected.provider,
-        provider_show_id: selected.provider_id,
+    MatchGroup {
+        group_key: group.group_key,
+        group_name: group.group_name,
+        show_title,
+        show_year,
+        provider: selected.as_ref().map(|c| c.provider.clone()).unwrap_or_default(),
+        provider_show_id: selected.map(|c| c.provider_id).unwrap_or_default(),
         candidates,
-        metadata_error: None,
+        metadata_error,
+        episodes: out_episodes,
     }
 }
 
@@ -473,7 +502,6 @@ async fn enrich_film(
     let fallback = Enriched {
         show_title: parsed.title.clone(),
         show_year: parsed.year,
-        episode_title: "Film".to_string(),
         provider: String::new(),
         provider_show_id: String::new(),
         candidates: Vec::new(),
@@ -508,7 +536,6 @@ async fn enrich_film(
     Enriched {
         show_title: selected.title,
         show_year: selected.year.or(parsed.year),
-        episode_title: "Film".to_string(),
         provider: selected.provider,
         provider_show_id: selected.provider_id,
         candidates,

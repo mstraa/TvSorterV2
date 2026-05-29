@@ -172,12 +172,136 @@ fn expand_files(
     Ok(files)
 }
 
-pub fn expand_video_files(root: &Path, relative_paths: &[String]) -> Result<Vec<PathBuf>, FsError> {
-    expand_files(root, relative_paths, true)
-}
-
 pub fn expand_source_files(root: &Path, relative_paths: &[String]) -> Result<Vec<PathBuf>, FsError> {
     expand_files(root, relative_paths, false)
+}
+
+/// A video file within a group, with the directory segments between the group
+/// root and the file (filename excluded). Segments drive season detection.
+#[derive(Debug, Clone)]
+pub struct GroupedFile {
+    pub path: PathBuf,
+    pub relative_segments: Vec<String>,
+}
+
+/// A set of video files that share one show identity (one selected folder, or
+/// the common parent of individually-selected files).
+#[derive(Debug, Clone)]
+pub struct FileGroup {
+    pub group_key: String,
+    pub group_name: String,
+    pub files: Vec<GroupedFile>,
+}
+
+fn leaf_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Directory segments of `file` relative to `group_root`, excluding the filename.
+fn dir_segments(group_root: &Path, file: &Path) -> Vec<String> {
+    match file.strip_prefix(group_root) {
+        Ok(rel) => {
+            let mut segments: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .collect();
+            segments.pop(); // drop the filename itself
+            segments
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+fn push_into_group(
+    groups: &mut std::collections::HashMap<String, FileGroup>,
+    order: &mut Vec<String>,
+    key: &str,
+    name: &str,
+    file: GroupedFile,
+) {
+    let entry = groups.entry(key.to_string()).or_insert_with(|| {
+        order.push(key.to_string());
+        FileGroup {
+            group_key: key.to_string(),
+            group_name: name.to_string(),
+            files: Vec::new(),
+        }
+    });
+    entry.files.push(file);
+}
+
+/// Expand a selection into groups of video files keyed by show-bearing folder.
+/// Selected directories become one group each (recursively); individually
+/// selected files are grouped under their parent folder. Order of first
+/// appearance is preserved; files within a group are sorted by path.
+pub fn expand_grouped(root: &Path, relative_paths: &[String]) -> Result<Vec<FileGroup>, FsError> {
+    let root_c = canonical_or_normalized(root);
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, FileGroup> = std::collections::HashMap::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    for relative_path in relative_paths {
+        let target = resolve_under_root(root, relative_path)?;
+        if target.is_dir() {
+            let group_key = relative_path.trim_end_matches('/').to_string();
+            let group_name = leaf_name(&target);
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            collect_files_recursive(&target, &mut candidates);
+            candidates.sort();
+            for candidate in candidates {
+                if !is_video_file(&candidate) {
+                    continue;
+                }
+                let resolved = canonical_or_normalized(&candidate);
+                if !seen.insert(resolved.clone()) {
+                    continue;
+                }
+                let segments = dir_segments(&target, &resolved);
+                push_into_group(
+                    &mut groups,
+                    &mut order,
+                    &group_key,
+                    &group_name,
+                    GroupedFile {
+                        path: resolved,
+                        relative_segments: segments,
+                    },
+                );
+            }
+        } else if target.is_file() && is_video_file(&target) {
+            let resolved = canonical_or_normalized(&target);
+            if !seen.insert(resolved.clone()) {
+                continue;
+            }
+            let parent = resolved.parent().unwrap_or(&root_c).to_path_buf();
+            let group_name = leaf_name(&parent);
+            let group_key = parent
+                .strip_prefix(&root_c)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| group_name.clone());
+            push_into_group(
+                &mut groups,
+                &mut order,
+                &group_key,
+                &group_name,
+                GroupedFile {
+                    path: resolved,
+                    relative_segments: Vec::new(),
+                },
+            );
+        }
+    }
+
+    let mut result: Vec<FileGroup> = order
+        .into_iter()
+        .filter_map(|key| groups.remove(&key))
+        .collect();
+    for group in &mut result {
+        group.files.sort_by(|a, b| a.path.cmp(&b.path));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -192,8 +316,31 @@ mod tests {
         File::create(dir.join("sub/a.mkv")).unwrap();
         assert!(resolve_under_root(&dir, "../etc").is_err());
         assert!(resolve_under_root(&dir, "sub").is_ok());
-        let videos = expand_video_files(&dir, &["sub".to_string()]).unwrap();
-        assert_eq!(videos.len(), 1);
+        let groups = expand_grouped(&dir, &["sub".to_string()]).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].files.len(), 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn groups_folder_with_season_subfolders() {
+        let dir = std::env::temp_dir().join(format!("tvsorter-grp-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("Black Lagoon/Season 1")).unwrap();
+        fs::create_dir_all(dir.join("Black Lagoon/Season 2")).unwrap();
+        File::create(dir.join("Black Lagoon/Season 1/01 - The Black Lagoon.mkv")).unwrap();
+        File::create(dir.join("Black Lagoon/Season 1/02 - Mangrove Heaven.mkv")).unwrap();
+        File::create(dir.join("Black Lagoon/Season 2/01 - The Vampire Twins.mkv")).unwrap();
+
+        let groups = expand_grouped(&dir, &["Black Lagoon".to_string()]).unwrap();
+        assert_eq!(groups.len(), 1);
+        let group = &groups[0];
+        assert_eq!(group.group_name, "Black Lagoon");
+        assert_eq!(group.files.len(), 3);
+        // Season folder must surface as a directory segment.
+        assert!(group.files[0]
+            .relative_segments
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("Season 1")));
         fs::remove_dir_all(&dir).ok();
     }
 }

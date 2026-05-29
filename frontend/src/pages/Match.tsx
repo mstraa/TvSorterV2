@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useProgress } from "../components/Progress";
@@ -19,31 +19,55 @@ interface LocationState {
   selected: string[];
 }
 
-interface EditableRow {
+interface EpisodeUi {
   source_path: string;
   source_name: string;
-  show_title: string;
-  show_year: string;
   season_number: number;
   episode_number: number;
   episode_title: string;
   quality: string;
+  expanded: boolean;
+}
+
+interface GroupUi {
+  group_key: string;
+  group_name: string;
+  show_title: string;
+  show_year: string;
   provider: string;
   provider_show_id: string;
   candidates: ShowCandidate[];
   metadata_error: string | null;
-}
-
-interface RowUi {
+  episodes: EpisodeUi[];
+  // manual-search UI state
   query: string;
   searchResults: ShowCandidate[];
   selectedSearchId: string;
   searchStatus: string;
-  episodes: EpisodeCandidate[];
+  episodeOptions: EpisodeCandidate[];
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function matchEpisodeTitle(
+  episodes: EpisodeCandidate[],
+  season: number,
+  episode: number,
+  isAnime: boolean,
+): string | null {
+  const exact = episodes.find((e) => e.season === season && e.episode === episode);
+  if (exact) return exact.title;
+  if (isAnime) {
+    const byNumber = episodes.find((e) => e.episode === episode);
+    if (byNumber) return byNumber.title;
+  }
+  return null;
 }
 
 export default function MatchPage() {
@@ -53,8 +77,7 @@ export default function MatchPage() {
   const state = location.state as LocationState | null;
 
   const [response, setResponse] = useState<MatchResponse | null>(null);
-  const [rows, setRows] = useState<EditableRow[]>([]);
-  const [rowUi, setRowUi] = useState<RowUi[]>([]);
+  const [groups, setGroups] = useState<GroupUi[]>([]);
   const [action, setAction] = useState("hardlink");
   const [conflict, setConflict] = useState("skip");
   const [preview, setPreview] = useState<PreviewResult[] | null>(null);
@@ -69,29 +92,30 @@ export default function MatchPage() {
       .postMatch(state.rootId, state.mediaType, state.selected)
       .then((res) => {
         setResponse(res);
-        setRows(
-          res.rows.map((row) => ({
-            source_path: row.source_path,
-            source_name: row.source_name,
-            show_title: row.show_title,
-            show_year: row.show_year != null ? String(row.show_year) : "",
-            season_number: row.season_number,
-            episode_number: row.episode_number,
-            episode_title: row.episode_title,
-            quality: row.quality,
-            provider: row.provider,
-            provider_show_id: row.provider_show_id,
-            candidates: row.candidates,
-            metadata_error: row.metadata_error,
-          })),
-        );
-        setRowUi(
-          res.rows.map((row) => ({
-            query: row.show_title,
+        setGroups(
+          res.groups.map((group) => ({
+            group_key: group.group_key,
+            group_name: group.group_name,
+            show_title: group.show_title,
+            show_year: group.show_year != null ? String(group.show_year) : "",
+            provider: group.provider,
+            provider_show_id: group.provider_show_id,
+            candidates: group.candidates,
+            metadata_error: group.metadata_error,
+            episodes: group.episodes.map((ep) => ({
+              source_path: ep.source_path,
+              source_name: ep.source_name,
+              season_number: ep.season_number,
+              episode_number: ep.episode_number,
+              episode_title: ep.episode_title,
+              quality: ep.quality,
+              expanded: false,
+            })),
+            query: group.show_title,
             searchResults: [],
             selectedSearchId: "",
             searchStatus: "",
-            episodes: [],
+            episodeOptions: [],
           })),
         );
       })
@@ -112,35 +136,52 @@ export default function MatchPage() {
 
   const mediaType = response?.media_type ?? state.mediaType;
   const isFilm = mediaType === "film";
+  const isAnime = mediaType === "anime";
+  const episodeCount = groups.reduce((sum, group) => sum + group.episodes.length, 0);
 
-  function updateRow(index: number, partial: Partial<EditableRow>) {
-    setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...partial } : row)));
+  function updateGroup(gi: number, partial: Partial<GroupUi>) {
+    setGroups((prev) => prev.map((group, i) => (i === gi ? { ...group, ...partial } : group)));
   }
 
-  function updateUi(index: number, partial: Partial<RowUi>) {
-    setRowUi((prev) => prev.map((ui, i) => (i === index ? { ...ui, ...partial } : ui)));
+  function updateEpisode(gi: number, ei: number, partial: Partial<EpisodeUi>) {
+    setGroups((prev) =>
+      prev.map((group, i) =>
+        i === gi
+          ? {
+              ...group,
+              episodes: group.episodes.map((ep, j) => (j === ei ? { ...ep, ...partial } : ep)),
+            }
+          : group,
+      ),
+    );
   }
 
-  function applyCandidate(index: number, candidate: ShowCandidate) {
-    updateRow(index, {
-      provider: candidate.provider,
-      provider_show_id: candidate.provider_id,
-      show_title: candidate.title,
-      show_year: candidate.year != null ? String(candidate.year) : "",
-    });
+  function toggleEpisode(gi: number, ei: number) {
+    setGroups((prev) =>
+      prev.map((group, i) =>
+        i === gi
+          ? {
+              ...group,
+              episodes: group.episodes.map((ep, j) =>
+                j === ei ? { ...ep, expanded: !ep.expanded } : ep,
+              ),
+            }
+          : group,
+      ),
+    );
   }
 
-  async function searchCandidates(index: number) {
-    const query = rowUi[index].query.trim();
+  async function searchGroup(gi: number) {
+    const query = groups[gi].query.trim();
     if (!query) {
-      updateUi(index, { searchStatus: "Enter a title to search." });
+      updateGroup(gi, { searchStatus: "Enter a title to search." });
       return;
     }
-    updateUi(index, { searchStatus: "Searching..." });
+    updateGroup(gi, { searchStatus: "Searching..." });
     progress.startDelayed("Searching metadata...");
     try {
       const { results } = await api.search(mediaType, query);
-      updateUi(index, {
+      updateGroup(gi, {
         searchResults: results,
         selectedSearchId: results[0]?.provider_id ?? "",
         searchStatus: results.length
@@ -148,62 +189,77 @@ export default function MatchPage() {
           : "No matches found.",
       });
     } catch (e) {
-      updateUi(index, { searchStatus: e instanceof ApiError ? e.message : "Search failed." });
+      updateGroup(gi, { searchStatus: e instanceof ApiError ? e.message : "Search failed." });
     } finally {
       progress.hide();
     }
   }
 
-  async function applyManualMatch(index: number, applyAll: boolean) {
-    const ui = rowUi[index];
-    const candidate = ui.searchResults.find((c) => c.provider_id === ui.selectedSearchId);
-    if (!candidate) {
-      updateUi(index, { searchStatus: "Choose a match first." });
-      return;
-    }
-    const targets = applyAll ? rows.map((_, i) => i) : [index];
-    targets.forEach((i) => applyCandidate(i, candidate));
-    updateUi(index, {
-      searchStatus: applyAll ? `Applied to ${targets.length} rows.` : "Applied to this row.",
+  // Apply a chosen show to the whole group, then refresh episode titles from the
+  // provider so the compact list reflects the new match.
+  async function selectShowForGroup(gi: number, candidate: ShowCandidate) {
+    updateGroup(gi, {
+      provider: candidate.provider,
+      provider_show_id: candidate.provider_id,
+      show_title: candidate.title,
+      show_year: candidate.year != null ? String(candidate.year) : "",
+      searchStatus: `Applied "${candidate.title}".`,
     });
 
-    if (!isFilm && candidate.provider_id) {
-      await applyEpisodeTitles(targets, candidate.provider_id);
-    }
-  }
+    if (isFilm || !candidate.provider_id) return;
 
-  async function applyEpisodeTitles(indices: number[], providerShowId: string) {
     progress.startDelayed("Loading episodes...");
     try {
-      const { results } = await api.episodes(mediaType, providerShowId);
-      setRows((prev) =>
-        prev.map((row, i) => {
-          if (!indices.includes(i)) return row;
-          const match = results.find(
-            (e) => e.season === row.season_number && e.episode === row.episode_number,
-          );
-          return match?.title ? { ...row, episode_title: match.title } : row;
+      const { results } = await api.episodes(mediaType, candidate.provider_id);
+      setGroups((prev) =>
+        prev.map((group, i) => {
+          if (i !== gi) return group;
+          return {
+            ...group,
+            episodeOptions: results,
+            episodes: group.episodes.map((ep) => {
+              const title = matchEpisodeTitle(
+                results,
+                ep.season_number,
+                ep.episode_number,
+                isAnime,
+              );
+              return title ? { ...ep, episode_title: title } : ep;
+            }),
+          };
         }),
       );
     } catch {
-      // ignore episode lookup failures
+      // Ignore episode lookup failures; titles fall back to parsed values.
     } finally {
       progress.hide();
     }
   }
 
-  async function loadEpisodes(index: number) {
-    const providerShowId = rows[index].provider_show_id;
+  function applyGroupMatch(gi: number) {
+    const group = groups[gi];
+    const candidate = group.searchResults.find((c) => c.provider_id === group.selectedSearchId);
+    if (!candidate) {
+      updateGroup(gi, { searchStatus: "Choose a match first." });
+      return;
+    }
+    void selectShowForGroup(gi, candidate);
+  }
+
+  async function loadGroupEpisodes(gi: number) {
+    const providerShowId = groups[gi].provider_show_id;
     if (!providerShowId) {
-      updateUi(index, { searchStatus: "Select a show first to load episodes." });
+      updateGroup(gi, { searchStatus: "Match a show first to load episodes." });
       return;
     }
     progress.startDelayed("Loading episodes...");
     try {
       const { results } = await api.episodes(mediaType, providerShowId);
-      updateUi(index, { episodes: results });
+      updateGroup(gi, { episodeOptions: results });
     } catch (e) {
-      updateUi(index, { searchStatus: e instanceof ApiError ? e.message : "Could not load episodes." });
+      updateGroup(gi, {
+        searchStatus: e instanceof ApiError ? e.message : "Could not load episodes.",
+      });
     } finally {
       progress.hide();
     }
@@ -214,17 +270,19 @@ export default function MatchPage() {
       media_type: mediaType,
       action,
       conflict_policy: conflict,
-      items: rows.map((row) => ({
-        source_path: row.source_path,
-        show_title: row.show_title,
-        show_year: row.show_year.trim() ? Number(row.show_year) : null,
-        season_number: isFilm ? 0 : row.season_number,
-        episode_number: isFilm ? 0 : row.episode_number,
-        episode_title: isFilm ? "Film" : row.episode_title,
-        quality: row.quality,
-        provider: row.provider || null,
-        provider_show_id: row.provider_show_id || null,
-      })),
+      items: groups.flatMap((group) =>
+        group.episodes.map((ep) => ({
+          source_path: ep.source_path,
+          show_title: group.show_title,
+          show_year: group.show_year.trim() ? Number(group.show_year) : null,
+          season_number: isFilm ? 0 : ep.season_number,
+          episode_number: isFilm ? 0 : ep.episode_number,
+          episode_title: isFilm ? "Film" : ep.episode_title,
+          quality: ep.quality,
+          provider: group.provider || null,
+          provider_show_id: group.provider_show_id || null,
+        })),
+      ),
     };
   }
 
@@ -310,7 +368,7 @@ export default function MatchPage() {
       {response && !response.output_root && (
         <p className="error">No {mediaType} output root configured. Configure it before importing.</p>
       )}
-      {rows.length === 0 ? (
+      {groups.length === 0 ? (
         <p>No video files selected.</p>
       ) : (
         <>
@@ -332,6 +390,13 @@ export default function MatchPage() {
                 <option value="fail">Fail</option>
               </select>
             </label>
+            <span className="muted match-count">
+              {isFilm
+                ? `${episodeCount} film${episodeCount === 1 ? "" : "s"}`
+                : `${groups.length} folder${groups.length === 1 ? "" : "s"} · ${episodeCount} episode${
+                    episodeCount === 1 ? "" : "s"
+                  }`}
+            </span>
             <button type="button" onClick={runPreview}>
               Preview
             </button>
@@ -367,168 +432,336 @@ export default function MatchPage() {
             </div>
           )}
 
-          {rows.map((row, index) => (
-            <fieldset className="match-row" key={row.source_path}>
-              <legend>{row.source_name}</legend>
-              {row.metadata_error && (
-                <p className="error">Metadata lookup failed: {row.metadata_error}</p>
-              )}
-              <div className="grid">
-                <label>
-                  {isFilm ? "Film title" : "Show title"}
-                  <input
-                    value={row.show_title}
-                    onChange={(e) => updateRow(index, { show_title: e.target.value })}
-                  />
-                </label>
-                <label>
-                  Year
-                  <input
-                    value={row.show_year}
-                    onChange={(e) => updateRow(index, { show_year: e.target.value })}
-                  />
-                </label>
-                {!isFilm && (
-                  <>
-                    <label>
-                      Season
-                      <input
-                        type="number"
-                        min={0}
-                        value={row.season_number}
-                        onChange={(e) => updateRow(index, { season_number: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label>
-                      Episode
-                      <input
-                        type="number"
-                        min={0}
-                        value={row.episode_number}
-                        onChange={(e) => updateRow(index, { episode_number: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label>
-                      Episode title
-                      <input
-                        value={row.episode_title}
-                        onChange={(e) => updateRow(index, { episode_title: e.target.value })}
-                      />
-                    </label>
-                  </>
-                )}
-                <label>
-                  Quality
-                  <input
-                    value={row.quality}
-                    onChange={(e) => updateRow(index, { quality: e.target.value })}
-                  />
-                </label>
-              </div>
-
-              <div className="manual-match">
-                <label>
-                  Search metadata
-                  <input
-                    type="search"
-                    value={rowUi[index]?.query ?? ""}
-                    onChange={(e) => updateUi(index, { query: e.target.value })}
-                  />
-                </label>
-                <button className="secondary-button" type="button" onClick={() => searchCandidates(index)}>
-                  Search
-                </button>
-                {rowUi[index]?.searchResults.length > 0 && (
-                  <>
-                    <select
-                      value={rowUi[index].selectedSearchId}
-                      onChange={(e) => updateUi(index, { selectedSearchId: e.target.value })}
-                    >
-                      {rowUi[index].searchResults.map((candidate) => (
-                        <option key={candidate.provider_id} value={candidate.provider_id}>
-                          {candidate.title}
-                          {candidate.year ? ` (${candidate.year})` : ""} - {candidate.provider}
-                        </option>
-                      ))}
-                    </select>
-                    <button className="secondary-button" type="button" onClick={() => applyManualMatch(index, false)}>
-                      Apply to row
-                    </button>
-                    <button className="secondary-button" type="button" onClick={() => applyManualMatch(index, true)}>
-                      Apply to all rows
-                    </button>
-                  </>
-                )}
-                <span className="muted">{rowUi[index]?.searchStatus}</span>
-              </div>
-
-              {!isFilm && (
-                <div className="manual-match">
-                  <button className="secondary-button" type="button" onClick={() => loadEpisodes(index)}>
-                    Load episodes
-                  </button>
-                  {rowUi[index]?.episodes.length > 0 && (
-                    <select
-                      defaultValue=""
-                      onChange={(e) => {
-                        const ep = rowUi[index].episodes[Number(e.target.value)];
-                        if (ep) {
-                          updateRow(index, {
-                            season_number: ep.season,
-                            episode_number: ep.episode,
-                            episode_title: ep.title,
-                          });
-                        }
-                      }}
-                    >
-                      <option value="" disabled>
-                        Pick an episode...
-                      </option>
-                      {rowUi[index].episodes.map((ep, i) => (
-                        <option key={i} value={i}>
-                          S{String(ep.season).padStart(2, "0")}E{String(ep.episode).padStart(2, "0")} - {ep.title}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              )}
-
-              {row.candidates.length > 0 && (
-                <details>
-                  <summary>Metadata candidates</summary>
-                  <label>
-                    Selected show
-                    <select
-                      onChange={(e) => {
-                        const candidate = row.candidates[Number(e.target.value)];
-                        if (candidate) applyCandidate(index, candidate);
-                      }}
-                    >
-                      {row.candidates.map((candidate, i) => (
-                        <option key={candidate.provider_id} value={i}>
-                          {candidate.title}
-                          {candidate.year ? ` (${candidate.year})` : ""} - {candidate.provider}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <ul className="muted">
-                    {row.candidates.map((candidate, i) => (
-                      <li key={i}>
-                        {candidate.title}
-                        {candidate.year ? ` (${candidate.year})` : ""} - {candidate.summary}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-              <p className="muted path-line">{row.source_path}</p>
-            </fieldset>
-          ))}
+          {groups.map((group, gi) =>
+            isFilm ? (
+              <FilmRow
+                key={group.group_key}
+                group={group}
+                gi={gi}
+                mediaType={mediaType}
+                onUpdateGroup={updateGroup}
+                onUpdateEpisode={updateEpisode}
+                onToggle={() => toggleEpisode(gi, 0)}
+                onSearch={() => searchGroup(gi)}
+                onApply={() => applyGroupMatch(gi)}
+              />
+            ) : (
+              <GroupCard
+                key={group.group_key}
+                group={group}
+                gi={gi}
+                isAnime={isAnime}
+                onUpdateGroup={updateGroup}
+                onUpdateEpisode={updateEpisode}
+                onToggleEpisode={toggleEpisode}
+                onSearch={() => searchGroup(gi)}
+                onApply={() => applyGroupMatch(gi)}
+                onLoadEpisodes={() => loadGroupEpisodes(gi)}
+              />
+            ),
+          )}
         </>
       )}
     </section>
+  );
+}
+
+interface GroupCardProps {
+  group: GroupUi;
+  gi: number;
+  isAnime: boolean;
+  onUpdateGroup: (gi: number, partial: Partial<GroupUi>) => void;
+  onUpdateEpisode: (gi: number, ei: number, partial: Partial<EpisodeUi>) => void;
+  onToggleEpisode: (gi: number, ei: number) => void;
+  onSearch: () => void;
+  onApply: () => void;
+  onLoadEpisodes: () => void;
+}
+
+function GroupCard({
+  group,
+  gi,
+  isAnime,
+  onUpdateGroup,
+  onUpdateEpisode,
+  onToggleEpisode,
+  onSearch,
+  onApply,
+  onLoadEpisodes,
+}: GroupCardProps) {
+  return (
+    <div className="match-group">
+      <div className="group-header">
+        <div className="group-show">
+          <input
+            className="group-title-input"
+            value={group.show_title}
+            onChange={(e) => onUpdateGroup(gi, { show_title: e.target.value })}
+            placeholder="Show title"
+          />
+          <input
+            className="group-year-input"
+            value={group.show_year}
+            onChange={(e) => onUpdateGroup(gi, { show_year: e.target.value })}
+            placeholder="Year"
+          />
+          {group.provider && <span className="provider-badge">{group.provider}</span>}
+          <span className="muted group-count">
+            {group.episodes.length} episode{group.episodes.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="group-folder muted">📁 {group.group_name}</div>
+      </div>
+
+      {group.metadata_error && (
+        <p className="error group-error">Metadata lookup failed: {group.metadata_error}</p>
+      )}
+
+      <div className="manual-match group-search">
+        <label>
+          Re-match show
+          <input
+            type="search"
+            value={group.query}
+            onChange={(e) => onUpdateGroup(gi, { query: e.target.value })}
+            placeholder="Search a different show..."
+          />
+        </label>
+        <button className="secondary-button" type="button" onClick={onSearch}>
+          Search
+        </button>
+        {group.searchResults.length > 0 && (
+          <>
+            <select
+              value={group.selectedSearchId}
+              onChange={(e) => onUpdateGroup(gi, { selectedSearchId: e.target.value })}
+            >
+              {group.searchResults.map((candidate) => (
+                <option key={candidate.provider_id} value={candidate.provider_id}>
+                  {candidate.title}
+                  {candidate.year ? ` (${candidate.year})` : ""} - {candidate.provider}
+                </option>
+              ))}
+            </select>
+            <button className="secondary-button" type="button" onClick={onApply}>
+              Apply to folder
+            </button>
+          </>
+        )}
+        {group.provider_show_id && (
+          <button className="secondary-button" type="button" onClick={onLoadEpisodes}>
+            Load episode list
+          </button>
+        )}
+        {group.searchStatus && <span className="muted">{group.searchStatus}</span>}
+      </div>
+
+      <table className="episode-table">
+        <thead>
+          <tr>
+            <th className="col-code">Ep</th>
+            <th className="col-title">Title</th>
+            <th className="col-quality">Quality</th>
+            <th className="col-edit" aria-label="Edit" />
+          </tr>
+        </thead>
+        <tbody>
+          {group.episodes.map((ep, ei) => (
+            <Fragment key={ep.source_path}>
+              <tr className="episode-row" onClick={() => onToggleEpisode(gi, ei)}>
+                <td className="col-code">
+                  S{pad2(ep.season_number)}E{pad2(ep.episode_number)}
+                </td>
+                <td className="col-title">{ep.episode_title}</td>
+                <td className="col-quality">{ep.quality}</td>
+                <td className="col-edit">{ep.expanded ? "▾" : "▸"}</td>
+              </tr>
+              {ep.expanded && (
+                <tr className="episode-editor-row">
+                  <td colSpan={4}>
+                    <div className="episode-editor">
+                      <div className="grid">
+                        <label>
+                          Season
+                          <input
+                            type="number"
+                            min={0}
+                            value={ep.season_number}
+                            onChange={(e) =>
+                              onUpdateEpisode(gi, ei, { season_number: Number(e.target.value) })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Episode
+                          <input
+                            type="number"
+                            min={0}
+                            value={ep.episode_number}
+                            onChange={(e) =>
+                              onUpdateEpisode(gi, ei, { episode_number: Number(e.target.value) })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Episode title
+                          <input
+                            value={ep.episode_title}
+                            onChange={(e) =>
+                              onUpdateEpisode(gi, ei, { episode_title: e.target.value })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Quality
+                          <input
+                            value={ep.quality}
+                            onChange={(e) => onUpdateEpisode(gi, ei, { quality: e.target.value })}
+                          />
+                        </label>
+                      </div>
+                      {group.episodeOptions.length > 0 && (
+                        <label className="episode-picker">
+                          Pick from provider
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              const choice = group.episodeOptions[Number(e.target.value)];
+                              if (choice) {
+                                onUpdateEpisode(gi, ei, {
+                                  season_number: choice.season,
+                                  episode_number: choice.episode,
+                                  episode_title: choice.title,
+                                });
+                              }
+                            }}
+                          >
+                            <option value="" disabled>
+                              Pick an episode...
+                            </option>
+                            {group.episodeOptions.map((choice, ci) => (
+                              <option key={ci} value={ci}>
+                                S{pad2(choice.season)}E{pad2(choice.episode)} - {choice.title}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <p className="muted path-line">{ep.source_path}</p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+      {isAnime && group.episodes.length > 1 && (
+        <p className="muted hint-line">
+          Anime episode titles are matched by episode number across the folder.
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface FilmRowProps {
+  group: GroupUi;
+  gi: number;
+  mediaType: MediaType;
+  onUpdateGroup: (gi: number, partial: Partial<GroupUi>) => void;
+  onUpdateEpisode: (gi: number, ei: number, partial: Partial<EpisodeUi>) => void;
+  onToggle: () => void;
+  onSearch: () => void;
+  onApply: () => void;
+}
+
+function FilmRow({
+  group,
+  gi,
+  onUpdateGroup,
+  onUpdateEpisode,
+  onToggle,
+  onSearch,
+  onApply,
+}: FilmRowProps) {
+  const ep = group.episodes[0];
+  const expanded = ep?.expanded ?? false;
+  return (
+    <div className="match-group film-group">
+      <div className="episode-row film-row" onClick={onToggle}>
+        <span className="film-title">
+          {group.show_title}
+          {group.show_year ? ` (${group.show_year})` : ""}
+        </span>
+        {group.provider && <span className="provider-badge">{group.provider}</span>}
+        <span className="col-quality">{ep?.quality}</span>
+        <span className="col-edit">{expanded ? "▾" : "▸"}</span>
+      </div>
+      {expanded && (
+        <div className="episode-editor">
+          {group.metadata_error && (
+            <p className="error group-error">Metadata lookup failed: {group.metadata_error}</p>
+          )}
+          <div className="grid">
+            <label>
+              Film title
+              <input
+                value={group.show_title}
+                onChange={(e) => onUpdateGroup(gi, { show_title: e.target.value })}
+              />
+            </label>
+            <label>
+              Year
+              <input
+                value={group.show_year}
+                onChange={(e) => onUpdateGroup(gi, { show_year: e.target.value })}
+              />
+            </label>
+            <label>
+              Quality
+              <input
+                value={ep?.quality ?? ""}
+                onChange={(e) => onUpdateEpisode(gi, 0, { quality: e.target.value })}
+              />
+            </label>
+          </div>
+          <div className="manual-match group-search">
+            <label>
+              Re-match film
+              <input
+                type="search"
+                value={group.query}
+                onChange={(e) => onUpdateGroup(gi, { query: e.target.value })}
+              />
+            </label>
+            <button className="secondary-button" type="button" onClick={onSearch}>
+              Search
+            </button>
+            {group.searchResults.length > 0 && (
+              <>
+                <select
+                  value={group.selectedSearchId}
+                  onChange={(e) => onUpdateGroup(gi, { selectedSearchId: e.target.value })}
+                >
+                  {group.searchResults.map((candidate) => (
+                    <option key={candidate.provider_id} value={candidate.provider_id}>
+                      {candidate.title}
+                      {candidate.year ? ` (${candidate.year})` : ""} - {candidate.provider}
+                    </option>
+                  ))}
+                </select>
+                <button className="secondary-button" type="button" onClick={onApply}>
+                  Apply
+                </button>
+              </>
+            )}
+            {group.searchStatus && <span className="muted">{group.searchStatus}</span>}
+          </div>
+          <p className="muted path-line">{ep?.source_path}</p>
+        </div>
+      )}
+    </div>
   );
 }
 

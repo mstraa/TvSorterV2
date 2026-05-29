@@ -70,26 +70,32 @@ export interface EpisodeCandidate {
   title: string;
 }
 
-export interface MatchRow {
+export interface MatchEpisode {
   source_path: string;
   source_name: string;
   parsed: ParsedMedia;
-  show_title: string;
-  show_year: number | null;
   season_number: number;
   episode_number: number;
   episode_title: string;
   quality: string;
+}
+
+export interface MatchGroup {
+  group_key: string;
+  group_name: string;
+  show_title: string;
+  show_year: number | null;
   provider: string;
   provider_show_id: string;
   candidates: ShowCandidate[];
   metadata_error: string | null;
+  episodes: MatchEpisode[];
 }
 
 export interface MatchResponse {
   media_type: MediaType;
   output_root: string | null;
-  rows: MatchRow[];
+  groups: MatchGroup[];
 }
 
 export interface ImportItem {

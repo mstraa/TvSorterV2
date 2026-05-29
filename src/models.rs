@@ -84,28 +84,38 @@ pub struct MatchPayload {
     pub selected: Vec<String>,
 }
 
+/// One episode (or, for films, the single file) within a match group.
 #[derive(Serialize)]
-pub struct MatchRow {
+pub struct MatchEpisode {
     pub source_path: String,
     pub source_name: String,
     pub parsed: ParsedMedia,
-    pub show_title: String,
-    pub show_year: Option<i64>,
     pub season_number: i64,
     pub episode_number: i64,
     pub episode_title: String,
     pub quality: String,
+}
+
+/// A group of files sharing one show identity, derived from a selected folder
+/// (TV/anime) or a single file (film).
+#[derive(Serialize)]
+pub struct MatchGroup {
+    pub group_key: String,
+    pub group_name: String,
+    pub show_title: String,
+    pub show_year: Option<i64>,
     pub provider: String,
     pub provider_show_id: String,
     pub candidates: Vec<ShowCandidate>,
     pub metadata_error: Option<String>,
+    pub episodes: Vec<MatchEpisode>,
 }
 
 #[derive(Serialize)]
 pub struct MatchResponse {
     pub media_type: String,
     pub output_root: Option<String>,
-    pub rows: Vec<MatchRow>,
+    pub groups: Vec<MatchGroup>,
 }
 
 // ---- Import / Preview ----

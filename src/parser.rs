@@ -14,12 +14,14 @@ static RELEASE_TRAIL_RE: Lazy<Regex> = Lazy::new(|| {
 static YEAR_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?:^|[\s._(-])((?:19|20)\d{2})(?:$|[\s._)-])").unwrap());
 static YEAR_TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:19|20)\d{2}").unwrap());
+// `(?:v\d{1,2})?` tolerates anime version suffixes glued to the episode number
+// (e.g. "05v2"), so the right episode is detected instead of falling through.
 static SXXEYY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})\b").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})(?:v\d{1,2})?\b").unwrap());
 static ONE_X_TWO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})\b").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})(?:v\d{1,2})?\b").unwrap());
 static EYY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:^|[\s._-])E(?P<episode>\d{1,3})(?:$|[\s._-])").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:^|[\s._-])E(?P<episode>\d{1,3})(?:v\d{1,2})?(?:$|[\s._-])").unwrap());
 static SEASON_EP_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\bseason[\s._-]*(?P<season>\d{1,2})[\s._-]*episode[\s._-]*(?P<episode>\d{1,3})\b")
         .unwrap()
@@ -38,13 +40,15 @@ static SEASON_INLINE_RE: Lazy<Regex> =
 // Permissive episode markers for files that only carry a number, e.g.
 // "12 - Title", "Episode 05", "Ep 7", "OVA 3", or a trailing "- 07".
 static EP_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(?:episode|épisode|ep|e|ova|oav|oad|#)[\s._-]*0*(?P<episode>\d{1,3})\b")
+    Regex::new(r"(?i)\b(?:episode|épisode|ep|e|ova|oav|oad|#)[\s._-]*0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?\b")
         .unwrap()
 });
 static LEADING_NUM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[\s._-]*0*(?P<episode>\d{1,3})(?:$|[\s._-])").unwrap());
+    Lazy::new(|| Regex::new(r"^[\s._-]*0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?(?:$|[\s._-])").unwrap());
+// A standalone number, optionally with a version suffix ("05v2") so the "v"
+// doesn't block the match.
 static STANDALONE_NUM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?:^|[\s._-])0*(?P<episode>\d{1,3})(?:$|[\s._-])").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)(?:^|[\s._-])0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?(?:$|[\s._-])").unwrap());
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ParsedMedia {
@@ -117,11 +121,13 @@ fn find_episode_loose(stem: &str) -> EpisodeMatch {
     for re in [&*EP_KEYWORD_RE, &*LEADING_NUM_RE, &*STANDALONE_NUM_RE] {
         if let Some(caps) = re.captures(stem) {
             let group = caps.name("episode").unwrap();
+            // Skip the version suffix ("v2") so it doesn't leak into the title.
+            let end = caps.name("ver").map(|m| m.end()).unwrap_or_else(|| group.end());
             return EpisodeMatch {
                 season: 1,
                 episode: group.as_str().parse().unwrap_or(1),
                 start: Some(group.start()),
-                end: Some(group.end()),
+                end: Some(end),
             };
         }
     }
@@ -309,6 +315,25 @@ mod tests {
         assert_eq!(parsed.episode, 1);
         assert_eq!(parsed.episode_title, "Pilot");
         assert_eq!(parsed.quality, "1080p");
+    }
+
+    #[test]
+    fn folder_episode_version_suffix() {
+        let parsed = parse_folder_episode(
+            &PathBuf::from("[I-R]Yakitate_Japan_05v2_xvid_vostfr.avi"),
+            "Yakitate Japan",
+            None,
+        );
+        assert_eq!(parsed.episode, 5);
+        assert_eq!(parsed.title, "Yakitate Japan");
+    }
+
+    #[test]
+    fn folder_episode_sxxeyy_version_suffix() {
+        let parsed =
+            parse_folder_episode(&PathBuf::from("Show.S02E07v2.mkv"), "Show", None);
+        assert_eq!(parsed.season, 2);
+        assert_eq!(parsed.episode, 7);
     }
 
     #[test]

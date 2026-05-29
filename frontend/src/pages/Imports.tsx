@@ -19,9 +19,21 @@ function baseName(path: string): string {
 export default function ImportsPage() {
   const { jobs, refresh } = useImports();
 
+  const clearableCount = jobs.filter(
+    (job) => job.state === "done" && job.failed_items === 0 && job.cancelled_items === 0,
+  ).length;
+
   async function cancelJob(id: string) {
     try {
       await api.cancelImportJob(id);
+    } finally {
+      refresh();
+    }
+  }
+
+  async function clearImported() {
+    try {
+      await api.clearImportJobs();
     } finally {
       refresh();
     }
@@ -37,7 +49,14 @@ export default function ImportsPage() {
 
   return (
     <section className="panel">
-      <h1>Imports</h1>
+      <div className="imports-header">
+        <h1>Imports</h1>
+        {clearableCount > 0 && (
+          <button className="secondary-button" type="button" onClick={clearImported}>
+            Clear imported ({clearableCount})
+          </button>
+        )}
+      </div>
       {jobs.length === 0 ? (
         <p className="muted">No imports yet. Start one from the Match queue.</p>
       ) : (

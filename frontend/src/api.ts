@@ -79,6 +79,9 @@ export const api = {
 
   listImportJobs: () => request<{ jobs: JobSnapshot[] }>("/api/import-jobs"),
 
+  clearImportJobs: () =>
+    request<{ cleared: number; jobs: JobSnapshot[] }>("/api/import-jobs/clear", { method: "POST" }),
+
   getImportJob: (id: string) => request<JobSnapshot>(`/api/import-jobs/${encodeURIComponent(id)}`),
 
   cancelImportJob: (id: string) =>

@@ -140,6 +140,17 @@ impl Job {
         matches!(self.lock().state.as_str(), "done" | "cancelled" | "failed")
     }
 
+    /// A job that finished with every file imported/skipped and no failures or
+    /// cancellations — safe to clear from the list.
+    pub fn is_clean_completed(&self) -> bool {
+        let s = self.lock();
+        s.state == "done"
+            && !s
+                .items
+                .iter()
+                .any(|it| it.status == "failed" || it.status == "cancelled")
+    }
+
     pub fn results(&self) -> Vec<ImportResult> {
         self.lock().results.clone()
     }
@@ -211,6 +222,15 @@ impl JobManager {
             .iter()
             .find(|j| j.id == id)
             .cloned()
+    }
+
+    /// Remove finished jobs that completed cleanly (all imported/skipped, no
+    /// failures or cancellations). Returns how many were cleared.
+    pub fn clear_completed(&self) -> usize {
+        let mut guard = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let before = guard.len();
+        guard.retain(|job| !job.is_clean_completed());
+        before - guard.len()
     }
 
     /// All jobs, newest first.

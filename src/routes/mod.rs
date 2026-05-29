@@ -28,6 +28,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/match", post(match_route))
         .route("/api/preview", post(preview))
         .route("/api/import-jobs", get(list_import_jobs).post(start_import_job))
+        .route("/api/import-jobs/clear", post(clear_import_jobs))
         .route("/api/import-jobs/:id", get(get_import_job))
         .route("/api/import-jobs/:id/cancel", post(cancel_import_job))
         .route("/api/import-jobs/:id/items/:index/cancel", post(cancel_import_item))
@@ -584,6 +585,17 @@ async fn list_import_jobs(State(state): State<AppState>) -> AppResult<Json<Value
         .map(|job| serde_json::to_value(job.snapshot()).unwrap())
         .collect();
     Ok(Json(json!({ "jobs": jobs })))
+}
+
+async fn clear_import_jobs(State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let cleared = state.jobs.clear_completed();
+    let jobs: Vec<Value> = state
+        .jobs
+        .list()
+        .into_iter()
+        .map(|job| serde_json::to_value(job.snapshot()).unwrap())
+        .collect();
+    Ok(Json(json!({ "cleared": cleared, "jobs": jobs })))
 }
 
 async fn get_import_job(

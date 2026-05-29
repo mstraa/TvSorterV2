@@ -954,6 +954,18 @@ details summary {
 
 /* ---- Imports page ---- */
 
+.imports-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.imports-header h1 {
+  margin: 0;
+}
+
 .state-badge.state-running,
 .state-badge.state-queued,
 .state-badge.state-done {

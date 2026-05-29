@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+.local-data/
+frontend/node_modules/
+frontend/dist/*
+!frontend/dist/.gitkeep
+frontend/*.tsbuildinfo
+*.db
+*.db-journal
+.DS_Store

@@ -77,10 +77,18 @@ export const api = {
       body: JSON.stringify(batch),
     }),
 
+  listImportJobs: () => request<{ jobs: JobSnapshot[] }>("/api/import-jobs"),
+
   getImportJob: (id: string) => request<JobSnapshot>(`/api/import-jobs/${encodeURIComponent(id)}`),
 
   cancelImportJob: (id: string) =>
     request<JobSnapshot>(`/api/import-jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+
+  cancelImportItem: (id: string, index: number) =>
+    request<JobSnapshot>(
+      `/api/import-jobs/${encodeURIComponent(id)}/items/${index}/cancel`,
+      { method: "POST" },
+    ),
 
   getImportJobResults: (id: string) =>
     request<{ results: PreviewResult[] }>(`/api/import-jobs/${encodeURIComponent(id)}/results`),

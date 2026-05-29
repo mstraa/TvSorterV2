@@ -27,9 +27,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/browse", get(browse))
         .route("/api/match", post(match_route))
         .route("/api/preview", post(preview))
-        .route("/api/import-jobs", post(start_import_job))
+        .route("/api/import-jobs", get(list_import_jobs).post(start_import_job))
         .route("/api/import-jobs/:id", get(get_import_job))
         .route("/api/import-jobs/:id/cancel", post(cancel_import_job))
+        .route("/api/import-jobs/:id/items/:index/cancel", post(cancel_import_item))
         .route("/api/import-jobs/:id/results", get(import_job_results))
         .route("/api/library", get(library))
         .route("/api/library/rescan", post(rescan_library))
@@ -575,11 +576,30 @@ async fn start_import_job(
     Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
 }
 
+async fn list_import_jobs(State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let jobs: Vec<Value> = state
+        .jobs
+        .list()
+        .into_iter()
+        .map(|job| serde_json::to_value(job.snapshot()).unwrap())
+        .collect();
+    Ok(Json(json!({ "jobs": jobs })))
+}
+
 async fn get_import_job(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> AppResult<Json<Value>> {
     let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
+    Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
+}
+
+async fn cancel_import_item(
+    State(state): State<AppState>,
+    AxumPath((id, index)): AxumPath<(String, usize)>,
+) -> AppResult<Json<Value>> {
+    let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
+    job.request_cancel_item(index);
     Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
 }
 

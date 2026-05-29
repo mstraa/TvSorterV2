@@ -849,6 +849,144 @@ details summary {
   overflow-wrap: anywhere;
 }
 
+/* ---- Imports page ---- */
+
+.state-badge.state-running,
+.state-badge.state-queued,
+.state-badge.state-done {
+  border-color: rgba(95, 168, 216, 0.45);
+  color: var(--blue);
+  background: rgba(95, 168, 216, 0.08);
+}
+
+.state-badge.state-queued {
+  border-color: var(--line-strong);
+  color: var(--muted);
+  background: var(--panel-2);
+}
+
+.state-badge.state-done {
+  border-color: rgba(101, 209, 127, 0.45);
+  color: var(--green);
+  background: rgba(101, 209, 127, 0.08);
+}
+
+.import-job-title {
+  flex: 1 1 220px;
+  font-weight: 600;
+}
+
+.import-job-counts {
+  font-size: 12px;
+}
+
+.import-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+.import-progress-bar {
+  flex: 1 1 auto;
+  height: 8px;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.import-progress-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--orange);
+  transition: width 0.3s ease;
+}
+
+.import-progress-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.import-items .col-status {
+  width: 96px;
+}
+
+.import-items .col-progress {
+  width: 150px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.import-item-row td {
+  padding: 6px 12px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--line);
+}
+
+.item-error {
+  font-size: 11px;
+  color: var(--red);
+}
+
+.icon-cancel {
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.icon-cancel:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.secondary-button.danger:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* Sidebar imports indicator */
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--orange);
+  color: #0a0a0a;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.nav-link-imports {
+  position: relative;
+  flex-wrap: wrap;
+}
+
+.nav-progress {
+  flex-basis: 100%;
+  height: 3px;
+  margin-top: 6px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+
+.nav-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--orange);
+  transition: width 0.3s ease;
+}
+
 /* ---- Progress overlay ---- */
 
 .progress-overlay {

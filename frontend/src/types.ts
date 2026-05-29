@@ -124,22 +124,31 @@ export interface PreviewResult {
   error: string | null;
 }
 
+export interface JobItem {
+  index: number;
+  name: string;
+  destination: string;
+  status: string;
+  bytes: number;
+  total: number;
+  error: string | null;
+}
+
 export interface JobSnapshot {
   id: string;
+  seq: number;
+  label: string;
   state: string;
   percent: number;
-  current_item: string;
-  current_action: string;
-  current_item_index: number;
-  current_item_bytes: number;
-  current_item_total: number;
-  current_item_percent: number;
   completed: number;
   total: number;
-  completed_items: number;
   total_items: number;
-  cancel_requested: boolean;
+  completed_items: number;
+  failed_items: number;
+  cancelled_items: number;
+  active: boolean;
   error: string | null;
+  items: JobItem[];
 }
 
 export interface LibraryFile {

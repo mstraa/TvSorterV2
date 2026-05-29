@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { ProgressProvider } from "./components/Progress";
+import { ImportsProvider, useImports } from "./components/ImportsContext";
 import BrowsePage from "./pages/Browse";
 import MatchPage from "./pages/Match";
+import ImportsPage from "./pages/Imports";
 import ResultsPage from "./pages/Results";
 import LibraryPage from "./pages/Library";
 import HistoryPage from "./pages/History";
@@ -11,10 +13,33 @@ import { toggleTheme, type Theme } from "./theme";
 
 const NAV = [
   { to: "/browse", label: "Browse", hint: "input" },
+  { to: "/imports", label: "Imports", hint: "jobs" },
   { to: "/library", label: "Library", hint: "output" },
   { to: "/history", label: "History", hint: "log" },
   { to: "/settings", label: "Settings", hint: "config" },
 ];
+
+function ImportsNavLink() {
+  const { jobs, activeCount } = useImports();
+  const active = jobs.filter((job) => job.active);
+  const percent = active.length
+    ? Math.round(active.reduce((sum, job) => sum + job.percent, 0) / active.length)
+    : 0;
+  return (
+    <NavLink to="/imports" className="nav-link nav-link-imports">
+      <span>
+        Imports
+        {activeCount > 0 && <span className="nav-badge">{activeCount}</span>}
+      </span>
+      <strong>jobs</strong>
+      {activeCount > 0 && (
+        <div className="nav-progress">
+          <span style={{ width: `${percent}%` }} />
+        </div>
+      )}
+    </NavLink>
+  );
+}
 
 export default function App() {
   const [theme, setTheme] = useState<Theme>(
@@ -23,6 +48,7 @@ export default function App() {
 
   return (
     <ProgressProvider>
+      <ImportsProvider>
       <div className="terminal-shell">
         <aside className="sidebar">
           <div className="brand">
@@ -34,12 +60,16 @@ export default function App() {
           </div>
 
           <nav className="filter-list">
-            {NAV.map((item) => (
-              <NavLink key={item.to} to={item.to} className="nav-link">
-                <span>{item.label}</span>
-                <strong>{item.hint}</strong>
-              </NavLink>
-            ))}
+            {NAV.map((item) =>
+              item.to === "/imports" ? (
+                <ImportsNavLink key={item.to} />
+              ) : (
+                <NavLink key={item.to} to={item.to} className="nav-link">
+                  <span>{item.label}</span>
+                  <strong>{item.hint}</strong>
+                </NavLink>
+              ),
+            )}
           </nav>
 
           <div className="sidebar-bottom">
@@ -62,6 +92,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/browse" replace />} />
             <Route path="/browse" element={<BrowsePage />} />
             <Route path="/match" element={<MatchPage />} />
+            <Route path="/imports" element={<ImportsPage />} />
             <Route path="/results/:jobId" element={<ResultsPage />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/history" element={<HistoryPage />} />
@@ -70,6 +101,7 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      </ImportsProvider>
     </ProgressProvider>
   );
 }

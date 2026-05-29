@@ -2,11 +2,10 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useProgress } from "../components/Progress";
-import { formatBytes } from "../theme";
+import { useImports } from "../components/ImportsContext";
 import type {
   EpisodeCandidate,
   ImportBatch,
-  JobSnapshot,
   MatchResponse,
   MediaType,
   PreviewResult,
@@ -47,10 +46,6 @@ interface GroupUi {
   episodeOptions: EpisodeCandidate[];
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
@@ -74,6 +69,7 @@ export default function MatchPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const progress = useProgress();
+  const imports = useImports();
   const state = location.state as LocationState | null;
 
   const [response, setResponse] = useState<MatchResponse | null>(null);
@@ -298,58 +294,17 @@ export default function MatchPage() {
     }
   }
 
-  function updateProgressFromJob(job: JobSnapshot) {
-    const itemPos =
-      job.current_item_index && job.total_items
-        ? `item ${job.current_item_index} of ${job.total_items}`
-        : "";
-    const prefix = job.cancel_requested ? "Cancelling" : "Importing";
-    progress.update({
-      percent: job.percent,
-      label: itemPos ? `${prefix} ${itemPos}` : `${prefix}...`,
-      currentItem: job.current_item,
-      detail: progressDetail(job),
-      cancellable: job.state === "running",
-      cancelRequested: job.cancel_requested,
-    });
-  }
-
+  // Import runs in the background: start the job and hand off to the Imports
+  // page, so the user can keep browsing and matching while it runs.
   async function runImport() {
-    progress.startNow("Starting import...", true);
-    let job: JobSnapshot;
     try {
-      job = await api.startImportJob(buildBatch());
+      await api.startImportJob(buildBatch());
     } catch (e) {
-      progress.hide();
       alert(e instanceof ApiError ? e.message : "Could not start import.");
       return;
     }
-    progress.setCancelHandler(() => {
-      api.cancelImportJob(job.id).then(updateProgressFromJob).catch(() => undefined);
-    });
-    updateProgressFromJob(job);
-    while (true) {
-      let snap: JobSnapshot;
-      try {
-        snap = await api.getImportJob(job.id);
-      } catch {
-        progress.hide();
-        alert("Could not read import progress.");
-        return;
-      }
-      updateProgressFromJob(snap);
-      if (snap.state === "done" || snap.state === "cancelled") {
-        progress.hide();
-        navigate(`/results/${job.id}`);
-        return;
-      }
-      if (snap.state === "failed") {
-        progress.hide();
-        alert(snap.error ?? "Import failed.");
-        return;
-      }
-      await sleep(250);
-    }
+    imports.refresh();
+    navigate("/imports");
   }
 
   if (error) {
@@ -765,23 +720,3 @@ function FilmRow({
   );
 }
 
-function progressDetail(job: JobSnapshot): string {
-  const parts: string[] = [];
-  if (job.cancel_requested) parts.push("Cancelling after the current copy stops");
-  if (typeof job.completed_items === "number" && typeof job.total_items === "number") {
-    parts.push(`${job.completed_items}/${job.total_items} items done`);
-  }
-  if (job.current_action === "copy" && job.current_item_total > 0) {
-    parts.push(
-      `${job.current_item_percent}% of current file (${formatBytes(job.current_item_bytes)} / ${formatBytes(
-        job.current_item_total,
-      )})`,
-    );
-  } else if (job.current_action) {
-    parts.push(`${job.current_action} in progress`);
-  }
-  if (job.current_action === "copy" && job.total > 0) {
-    parts.push(`${formatBytes(job.completed)} / ${formatBytes(job.total)} total`);
-  }
-  return parts.join(" - ");
-}

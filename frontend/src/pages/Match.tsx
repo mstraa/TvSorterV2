@@ -74,7 +74,7 @@ export default function MatchPage() {
 
   const [response, setResponse] = useState<MatchResponse | null>(null);
   const [groups, setGroups] = useState<GroupUi[]>([]);
-  const [action, setAction] = useState("hardlink");
+  const [action, setAction] = useState("copy");
   const [conflict, setConflict] = useState("skip");
   const [preview, setPreview] = useState<PreviewResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);

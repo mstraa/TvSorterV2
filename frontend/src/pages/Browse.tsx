@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useProgress } from "../components/Progress";
+import Select from "../components/Select";
 import type { BrowseResponse, MediaType } from "../types";
 
 const STATUS_FILTERS = [
@@ -143,15 +144,15 @@ export default function BrowsePage() {
         <div className="toolbar status-toolbar">
           <label>
             Set selected status
-            <select value={selectedStatus} onChange={(e) => setSelectedStatus(e.target.value)}>
-              <option value="auto">Auto</option>
-              <option value="none">No status</option>
-              {MANUAL_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={selectedStatus}
+              onChange={setSelectedStatus}
+              options={[
+                { value: "auto", label: "Auto" },
+                { value: "none", label: "No status" },
+                ...MANUAL_STATUSES.map((status) => ({ value: status, label: status })),
+              ]}
+            />
           </label>
           <button className="secondary-button" type="button" onClick={applyStatus}>
             Apply Status
@@ -161,37 +162,37 @@ export default function BrowsePage() {
         <div className="toolbar browse-toolbar">
           <label>
             Input root
-            <select
-              value={data.active_root?.id ?? ""}
-              onChange={(e) => changeRoot(Number(e.target.value))}
-            >
-              {data.roots.map((root) => (
-                <option key={root.id} value={root.id}>
-                  {root.path}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={data.active_root?.id != null ? String(data.active_root.id) : ""}
+              onChange={(v) => changeRoot(Number(v))}
+              options={data.roots.map((root) => ({ value: String(root.id), label: root.path }))}
+            />
           </label>
           <label>
             Type
-            <select value={mediaType} onChange={(e) => setMediaType(e.target.value as MediaType)}>
-              <option value="tv">TV</option>
-              <option value="anime">Anime</option>
-              <option value="film">Film</option>
-            </select>
+            <Select
+              value={mediaType}
+              onChange={(v) => setMediaType(v as MediaType)}
+              options={[
+                { value: "tv", label: "TV" },
+                { value: "anime", label: "Anime" },
+                { value: "film", label: "Film" },
+              ]}
+            />
           </label>
           <button type="button" onClick={matchSelected}>
             Match Selected
           </button>
           <label className="browse-filter">
             Show
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              {STATUS_FILTERS.map((filter) => (
-                <option key={filter.value} value={filter.value}>
-                  {filter.label}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_FILTERS.map((filter) => ({
+                value: filter.value,
+                label: filter.label,
+              }))}
+            />
           </label>
         </div>
 

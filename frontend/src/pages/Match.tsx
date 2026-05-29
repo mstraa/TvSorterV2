@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useProgress } from "../components/Progress";
 import { useImports } from "../components/ImportsContext";
+import Select from "../components/Select";
 import type {
   EpisodeCandidate,
   ImportBatch,
@@ -330,20 +331,28 @@ export default function MatchPage() {
           <div className="toolbar sticky-toolbar">
             <label>
               Action
-              <select value={action} onChange={(e) => setAction(e.target.value)}>
-                <option value="hardlink">Hardlink</option>
-                <option value="copy">Copy</option>
-                <option value="test">Test</option>
-              </select>
+              <Select
+                value={action}
+                onChange={setAction}
+                options={[
+                  { value: "copy", label: "Copy" },
+                  { value: "hardlink", label: "Hardlink" },
+                  { value: "test", label: "Test" },
+                ]}
+              />
             </label>
             <label>
               Conflict
-              <select value={conflict} onChange={(e) => setConflict(e.target.value)}>
-                <option value="skip">Skip</option>
-                <option value="replace">Replace</option>
-                <option value="index">Keep Both</option>
-                <option value="fail">Fail</option>
-              </select>
+              <Select
+                value={conflict}
+                onChange={setConflict}
+                options={[
+                  { value: "skip", label: "Skip" },
+                  { value: "replace", label: "Replace" },
+                  { value: "index", label: "Keep Both" },
+                  { value: "fail", label: "Fail" },
+                ]}
+              />
             </label>
             <span className="muted match-count">
               {isFilm
@@ -487,17 +496,14 @@ function GroupCard({
         </button>
         {group.searchResults.length > 0 && (
           <>
-            <select
+            <Select
               value={group.selectedSearchId}
-              onChange={(e) => onUpdateGroup(gi, { selectedSearchId: e.target.value })}
-            >
-              {group.searchResults.map((candidate) => (
-                <option key={candidate.provider_id} value={candidate.provider_id}>
-                  {candidate.title}
-                  {candidate.year ? ` (${candidate.year})` : ""} - {candidate.provider}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => onUpdateGroup(gi, { selectedSearchId: v })}
+              options={group.searchResults.map((candidate) => ({
+                value: candidate.provider_id,
+                label: `${candidate.title}${candidate.year ? ` (${candidate.year})` : ""} - ${candidate.provider}`,
+              }))}
+            />
             <button className="secondary-button" type="button" onClick={onApply}>
               Apply to folder
             </button>
@@ -578,10 +584,11 @@ function GroupCard({
                       {group.episodeOptions.length > 0 && (
                         <label className="episode-picker">
                           Pick from provider
-                          <select
-                            defaultValue=""
-                            onChange={(e) => {
-                              const choice = group.episodeOptions[Number(e.target.value)];
+                          <Select
+                            value=""
+                            placeholder="Pick an episode..."
+                            onChange={(v) => {
+                              const choice = group.episodeOptions[Number(v)];
                               if (choice) {
                                 onUpdateEpisode(gi, ei, {
                                   season_number: choice.season,
@@ -590,16 +597,11 @@ function GroupCard({
                                 });
                               }
                             }}
-                          >
-                            <option value="" disabled>
-                              Pick an episode...
-                            </option>
-                            {group.episodeOptions.map((choice, ci) => (
-                              <option key={ci} value={ci}>
-                                S{pad2(choice.season)}E{pad2(choice.episode)} - {choice.title}
-                              </option>
-                            ))}
-                          </select>
+                            options={group.episodeOptions.map((choice, ci) => ({
+                              value: String(ci),
+                              label: `S${pad2(choice.season)}E${pad2(choice.episode)} - ${choice.title}`,
+                            }))}
+                          />
                         </label>
                       )}
                       <p className="muted path-line">{ep.source_path}</p>
@@ -695,17 +697,14 @@ function FilmRow({
             </button>
             {group.searchResults.length > 0 && (
               <>
-                <select
+                <Select
                   value={group.selectedSearchId}
-                  onChange={(e) => onUpdateGroup(gi, { selectedSearchId: e.target.value })}
-                >
-                  {group.searchResults.map((candidate) => (
-                    <option key={candidate.provider_id} value={candidate.provider_id}>
-                      {candidate.title}
-                      {candidate.year ? ` (${candidate.year})` : ""} - {candidate.provider}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => onUpdateGroup(gi, { selectedSearchId: v })}
+                  options={group.searchResults.map((candidate) => ({
+                    value: candidate.provider_id,
+                    label: `${candidate.title}${candidate.year ? ` (${candidate.year})` : ""} - ${candidate.provider}`,
+                  }))}
+                />
                 <button className="secondary-button" type="button" onClick={onApply}>
                   Apply
                 </button>

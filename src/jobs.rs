@@ -6,7 +6,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::db::Database;
-use crate::importer::{execute_import, import_request_units, result_to_record, ImportRequest, ImportResult};
+use crate::importer::{
+    build_destination, execute_import, import_request_units, result_to_record, ImportRequest,
+    ImportResult,
+};
 
 /// One file within an import job. `status` is one of:
 /// queued | running | imported | skipped | preview | failed | cancelled.
@@ -181,7 +184,12 @@ impl JobManager {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
-                destination: String::new(),
+                // Planned destination name, shown before the copy runs; updated
+                // to the actual final path once the file completes.
+                destination: build_destination(request)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
                 status: "queued".to_string(),
                 bytes: 0,
                 total: import_request_units(request),

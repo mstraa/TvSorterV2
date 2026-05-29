@@ -302,6 +302,22 @@ textarea {
   font-size: 13px;
 }
 
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 28px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%238c8c8c' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+
+select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -912,11 +928,24 @@ details summary {
   width: 96px;
 }
 
+.import-items .col-dest {
+  width: 30%;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .import-items .col-progress {
   width: 150px;
   font-family: var(--mono);
   font-size: 11px;
   white-space: nowrap;
+}
+
+.import-items .col-cancel {
+  width: 40px;
+  text-align: center;
+  padding: 0;
 }
 
 .import-item-row td {
@@ -931,18 +960,22 @@ details summary {
 }
 
 .icon-cancel {
-  border: 1px solid var(--line-strong);
-  background: var(--panel-2);
-  color: var(--muted);
-  width: 22px;
-  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .icon-cancel:hover {
-  border-color: var(--red);
+  background: rgba(255, 107, 95, 0.12);
   color: var(--red);
 }
 

@@ -10,6 +10,12 @@ function itemIsActive(item: JobItem): boolean {
   return !TERMINAL_ITEM_STATES.has(item.status);
 }
 
+function baseName(path: string): string {
+  if (!path) return "";
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] ?? "";
+}
+
 export default function ImportsPage() {
   const { jobs, refresh } = useImports();
 
@@ -95,9 +101,10 @@ function JobCard({ job, onCancelJob, onCancelItem }: JobCardProps) {
         <thead>
           <tr>
             <th className="col-status">Status</th>
-            <th className="col-title">File</th>
+            <th className="col-title">Source</th>
+            <th className="col-dest">New name</th>
             <th className="col-progress">Progress</th>
-            <th className="col-edit" aria-label="Cancel" />
+            <th className="col-cancel" aria-label="Cancel" />
           </tr>
         </thead>
         <tbody>
@@ -110,6 +117,7 @@ function JobCard({ job, onCancelJob, onCancelItem }: JobCardProps) {
                 {item.name}
                 {item.error && <span className="muted item-error"> — {item.error}</span>}
               </td>
+              <td className="col-dest muted">{baseName(item.destination) || "—"}</td>
               <td className="col-progress muted">
                 {item.status === "running" && item.total > 0
                   ? `${formatBytes(item.bytes)} / ${formatBytes(item.total)}`
@@ -117,12 +125,13 @@ function JobCard({ job, onCancelJob, onCancelItem }: JobCardProps) {
                     ? formatBytes(item.total)
                     : ""}
               </td>
-              <td className="col-edit">
+              <td className="col-cancel">
                 {itemIsActive(item) && job.active && (
                   <button
                     className="icon-cancel"
                     type="button"
                     title="Cancel this file"
+                    aria-label="Cancel this file"
                     onClick={() => onCancelItem(item.index)}
                   >
                     ✕

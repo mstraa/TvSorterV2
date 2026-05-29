@@ -775,11 +775,23 @@ details summary {
   vertical-align: middle;
 }
 
+/* Global tables use table-layout: fixed, so columns need explicit widths. */
+.episode-table .col-code {
+  width: 84px;
+}
+
+.episode-table .col-quality {
+  width: 78px;
+}
+
+.episode-table .col-edit {
+  width: 36px;
+}
+
 .col-code {
   font-family: var(--mono);
   white-space: nowrap;
   color: var(--muted);
-  width: 1%;
 }
 
 .col-title {
@@ -791,11 +803,9 @@ details summary {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
-  width: 1%;
 }
 
 .col-edit {
-  width: 1%;
   text-align: center;
   color: var(--faint);
   user-select: none;

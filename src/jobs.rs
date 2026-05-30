@@ -166,6 +166,12 @@ impl Job {
             return false;
         }
         for request in requests {
+            // Items keep their own media_type/action/root and execute correctly,
+            // but a job spanning more than one media type can't be labelled with a
+            // single one — fall back to the generic "media" label in that case.
+            if !s.media_type.is_empty() && request.media_type != s.media_type {
+                s.media_type.clear();
+            }
             let index = s.items.len() + 1;
             let item = build_item(index, request);
             s.total_units += item.total;

@@ -158,75 +158,19 @@ async fn browse(
         path: r.path.clone(),
     });
 
-    let mut entries = Vec::new();
-    let mut error = None;
-    let mut parent_path = String::new();
-
-    if let Some(root) = active_root {
-        let root_path = PathBuf::from(&root.path);
-        match list_directory(&root_path, &query.path) {
-            Ok(listed) => {
-                // Files imported from a folder and then moved out of the input
-                // tree no longer exist to be listed, but the folder should still
-                // reflect that they were imported. Fetch every such record under
-                // the *current* directory in one query, then bucket them by the
-                // child folder they belong to (one scan instead of one per child).
-                let moved_by_child = bucket_moved_imports(&state, &root_path, &query.path, &listed);
-
-                // Map each entry to the set of source files it covers.
-                let mut entry_sources: HashMap<String, Vec<PathBuf>> = HashMap::new();
-                let mut all_sources: Vec<PathBuf> = Vec::new();
-                for entry in &listed {
-                    let sources = if entry.is_dir {
-                        let mut present = expand_source_files(
-                            &root_path,
-                            std::slice::from_ref(&entry.relative_path),
-                        )
-                        .unwrap_or_default();
-                        let present_set: std::collections::HashSet<&PathBuf> = present.iter().collect();
-                        let moved: Vec<PathBuf> = moved_by_child
-                            .get(&entry.relative_path)
-                            .map(|paths| {
-                                paths.iter().filter(|p| !present_set.contains(p)).cloned().collect()
-                            })
-                            .unwrap_or_default();
-                        drop(present_set);
-                        present.extend(moved);
-                        present
-                    } else {
-                        vec![canonical_or_normalized(&entry.absolute_path)]
-                    };
-                    for s in &sources {
-                        all_sources.push(s.clone());
-                    }
-                    entry_sources.insert(entry.relative_path.clone(), sources);
-                }
-                let imports = state.db.latest_imports_for_sources(&all_sources);
-                let overrides = state.db.source_status_overrides(&all_sources);
-
-                for entry in listed {
-                    let sources = entry_sources.get(&entry.relative_path).cloned().unwrap_or_default();
-                    let status = compute_browse_status(&sources, &imports, &overrides);
-                    entries.push(BrowseEntry {
-                        name: entry.name,
-                        relative_path: entry.relative_path,
-                        is_dir: entry.is_dir,
-                        is_video: entry.is_video,
-                        is_hardlink: entry.is_hardlink,
-                        size: entry.size,
-                        size_human: human_file_size(entry.size),
-                        status: status.status,
-                        status_key: status.status_key,
-                        manual_status: status.manual_status,
-                        latest_import_result: status.latest_import_result,
-                        source_count: status.source_count,
-                    });
-                }
-                parent_path = parent_relative(&query.path);
-            }
-            Err(e) => error = Some(e.to_string()),
+    // The directory listing and per-entry stat/canonicalize calls hit the
+    // (often network-mounted) filesystem, so run them on a blocking thread
+    // instead of stalling a Tokio worker.
+    let (entries, error, parent_path) = match active_root {
+        Some(root) => {
+            let task_state = state.clone();
+            let path = query.path.clone();
+            tokio::task::spawn_blocking(move || browse_directory(&task_state, &root, &path))
+                .await
+                .unwrap_or_else(|e| (Vec::new(), Some(e.to_string()), String::new()))
         }
-    }
+        None => (Vec::new(), None, String::new()),
+    };
 
     Json(BrowseResponse {
         roots: root_infos,
@@ -236,6 +180,76 @@ async fn browse(
         entries,
         error,
     })
+}
+
+/// List one directory of an input root and compute each entry's import status.
+/// Returns `(entries, error, parent_path)`. Synchronous (filesystem + SQLite),
+/// so callers run it via `spawn_blocking`.
+fn browse_directory(
+    state: &AppState,
+    root: &crate::db::InputRoot,
+    rel_path: &str,
+) -> (Vec<BrowseEntry>, Option<String>, String) {
+    let root_path = PathBuf::from(&root.path);
+    let listed = match list_directory(&root_path, rel_path) {
+        Ok(listed) => listed,
+        Err(e) => return (Vec::new(), Some(e.to_string()), String::new()),
+    };
+
+    // Files imported from a folder and then moved out of the input tree no
+    // longer exist to be listed, but the folder should still reflect that they
+    // were imported. Fetch every such record under the *current* directory in
+    // one query, then bucket them by the child folder they belong to (one scan
+    // instead of one per child).
+    let moved_by_child = bucket_moved_imports(state, &root_path, rel_path, &listed);
+
+    // Map each entry to the set of source files it covers.
+    let mut entry_sources: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut all_sources: Vec<PathBuf> = Vec::new();
+    for entry in &listed {
+        let sources = if entry.is_dir {
+            let mut present =
+                expand_source_files(&root_path, std::slice::from_ref(&entry.relative_path))
+                    .unwrap_or_default();
+            let present_set: std::collections::HashSet<&PathBuf> = present.iter().collect();
+            let moved: Vec<PathBuf> = moved_by_child
+                .get(&entry.relative_path)
+                .map(|paths| paths.iter().filter(|p| !present_set.contains(p)).cloned().collect())
+                .unwrap_or_default();
+            drop(present_set);
+            present.extend(moved);
+            present
+        } else {
+            vec![canonical_or_normalized(&entry.absolute_path)]
+        };
+        for s in &sources {
+            all_sources.push(s.clone());
+        }
+        entry_sources.insert(entry.relative_path.clone(), sources);
+    }
+    let imports = state.db.latest_imports_for_sources(&all_sources);
+    let overrides = state.db.source_status_overrides(&all_sources);
+
+    let mut entries = Vec::new();
+    for entry in listed {
+        let sources = entry_sources.get(&entry.relative_path).cloned().unwrap_or_default();
+        let status = compute_browse_status(&sources, &imports, &overrides);
+        entries.push(BrowseEntry {
+            name: entry.name,
+            relative_path: entry.relative_path,
+            is_dir: entry.is_dir,
+            is_video: entry.is_video,
+            is_hardlink: entry.is_hardlink,
+            size: entry.size,
+            size_human: human_file_size(entry.size),
+            status: status.status,
+            status_key: status.status_key,
+            manual_status: status.manual_status,
+            latest_import_result: status.latest_import_result,
+            source_count: status.source_count,
+        });
+    }
+    (entries, None, parent_relative(rel_path))
 }
 
 struct BrowseStatus {
@@ -479,7 +493,13 @@ async fn enrich_group(
         Ok(found) => (found, None),
         Err(message) => (Vec::new(), Some(message)),
     };
-    let selected = candidates.first().cloned();
+    // When the folder name carried a year, prefer the candidate that matches it
+    // (e.g. a remake vs. the original) instead of blindly taking the first hit.
+    let selected = candidates
+        .iter()
+        .find(|c| folder_year.is_some() && c.year == folder_year)
+        .cloned()
+        .or_else(|| candidates.first().cloned());
 
     // One episode fetch for the selected show.
     let episodes = match &selected {
@@ -879,7 +899,16 @@ fn status_update_sources(state: &AppState, payload: &SourceStatusPayload) -> App
 // ---------------------------------------------------------------------------
 
 async fn folders(Query(query): Query<FoldersQuery>) -> AppResult<Json<FoldersResponse>> {
-    let current = resolve_picker_path(&query.path)?;
+    // resolve_picker_path + read_dir touch the filesystem; keep them off the
+    // async runtime.
+    tokio::task::spawn_blocking(move || folders_blocking(&query.path))
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+}
+
+fn folders_blocking(path: &str) -> AppResult<FoldersResponse> {
+    let current = resolve_picker_path(path)?;
     let mut children: Vec<PathBuf> = std::fs::read_dir(&current)
         .map_err(|e| AppError::bad_request(e.to_string()))?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -903,12 +932,12 @@ async fn folders(Query(query): Query<FoldersQuery>) -> AppResult<Json<FoldersRes
         .map(|root| root.to_string())
         .collect();
 
-    Ok(Json(FoldersResponse {
+    Ok(FoldersResponse {
         path: current.to_string_lossy().to_string(),
         parent,
         folders,
         roots,
-    }))
+    })
 }
 
 fn resolve_picker_path(value: &str) -> AppResult<PathBuf> {

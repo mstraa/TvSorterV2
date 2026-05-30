@@ -427,11 +427,9 @@ fn value_to_id(value: &Value) -> String {
 }
 
 fn year_from_date(value: Option<&str>) -> Option<i64> {
-    let value = value?;
-    if value.len() < 4 {
-        return None;
-    }
-    value[..4].parse().ok()
+    // `get(..4)` returns None on a short string or a non-char-boundary split,
+    // so this never panics on multibyte provider data.
+    value?.get(..4)?.parse().ok()
 }
 
 fn strip_html(value: &str) -> String {

@@ -11,8 +11,8 @@ use crate::assets::static_handler;
 use crate::db::ImportRow;
 use crate::error::{AppError, AppResult};
 use crate::filesystem::{
-    canonical_or_normalized, expand_grouped, expand_source_files, is_relative_to, list_directory,
-    resolve_under_root,
+    canonical_or_normalized, expand_grouped, expand_grouped_audio, expand_source_files,
+    is_relative_to, list_directory, resolve_under_root,
 };
 use crate::formatting::human_file_size;
 use crate::importer::{preview_import, ImportRequest};
@@ -31,11 +31,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/browse", get(browse))
         .route("/api/match", post(match_route))
         .route("/api/preview", post(preview))
-        .route("/api/import-jobs", get(list_import_jobs).post(start_import_job))
+        .route(
+            "/api/import-jobs",
+            get(list_import_jobs).post(start_import_job),
+        )
         .route("/api/import-jobs/clear", post(clear_import_jobs))
         .route("/api/import-jobs/:id", get(get_import_job))
         .route("/api/import-jobs/:id/cancel", post(cancel_import_job))
-        .route("/api/import-jobs/:id/items/:index/cancel", post(cancel_import_item))
+        .route(
+            "/api/import-jobs/:id/items/:index/cancel",
+            post(cancel_import_item),
+        )
         .route("/api/import-jobs/:id/results", get(import_job_results))
         .route("/api/library", get(library))
         .route("/api/library/rescan", post(rescan_library))
@@ -58,7 +64,12 @@ async fn health() -> Json<Value> {
 // ---------------------------------------------------------------------------
 
 async fn get_settings(State(state): State<AppState>) -> Json<SettingsResponse> {
-    let roots: Vec<String> = state.db.list_input_roots().into_iter().map(|r| r.path).collect();
+    let roots: Vec<String> = state
+        .db
+        .list_input_roots()
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
     let output_roots = state.output_roots();
     let checks = settings_checks(&roots, &output_roots);
     Json(SettingsResponse {
@@ -66,6 +77,7 @@ async fn get_settings(State(state): State<AppState>) -> Json<SettingsResponse> {
         tv_output_root: state.db.get_setting("tv_output_root", ""),
         anime_output_root: state.db.get_setting("anime_output_root", ""),
         film_output_root: state.db.get_setting("film_output_root", ""),
+        music_output_root: state.db.get_setting("music_output_root", ""),
         copy_rate_limit_mbps: state.db.get_setting("copy_rate_limit_mbps", "15"),
         checks,
     })
@@ -95,13 +107,20 @@ async fn save_settings(
         &normalize_optional(&payload.film_output_root),
     );
     state.db.set_setting(
+        "music_output_root",
+        &normalize_optional(&payload.music_output_root),
+    );
+    state.db.set_setting(
         "copy_rate_limit_mbps",
         &normalize_copy_rate_limit(&payload.copy_rate_limit_mbps),
     );
     Json(json!({ "status": "ok" }))
 }
 
-fn settings_checks(input_roots: &[String], output_roots: &HashMap<String, PathBuf>) -> Vec<PermissionCheck> {
+fn settings_checks(
+    input_roots: &[String],
+    output_roots: &HashMap<String, PathBuf>,
+) -> Vec<PermissionCheck> {
     let mut checks = Vec::new();
     for root in input_roots {
         let path = PathBuf::from(root);
@@ -214,7 +233,13 @@ fn browse_directory(
             let present_set: std::collections::HashSet<&PathBuf> = present.iter().collect();
             let moved: Vec<PathBuf> = moved_by_child
                 .get(&entry.relative_path)
-                .map(|paths| paths.iter().filter(|p| !present_set.contains(p)).cloned().collect())
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter(|p| !present_set.contains(p))
+                        .cloned()
+                        .collect()
+                })
                 .unwrap_or_default();
             drop(present_set);
             present.extend(moved);
@@ -232,7 +257,10 @@ fn browse_directory(
 
     let mut entries = Vec::new();
     for entry in listed {
-        let sources = entry_sources.get(&entry.relative_path).cloned().unwrap_or_default();
+        let sources = entry_sources
+            .get(&entry.relative_path)
+            .cloned()
+            .unwrap_or_default();
         let status = compute_browse_status(&sources, &imports, &overrides);
         entries.push(BrowseEntry {
             name: entry.name,
@@ -265,7 +293,9 @@ fn source_status_for_path(
     imports: &HashMap<String, ImportRow>,
     overrides: &HashMap<String, crate::db::SourceStatusOverride>,
 ) -> (Option<String>, String, Option<String>) {
-    let key = canonical_or_normalized(source).to_string_lossy().to_string();
+    let key = canonical_or_normalized(source)
+        .to_string_lossy()
+        .to_string();
     let override_status = overrides.get(&key);
     let latest = imports.get(&key);
     let status = if let Some(o) = override_status {
@@ -298,18 +328,19 @@ fn compute_browse_status(
         .map(|(status, _, _)| status.clone().unwrap_or_else(|| "none".to_string()))
         .collect();
 
-    let (status, status_key) = if states.is_empty() || status_keys == std::iter::once("none".to_string()).collect() {
-        (None, "none".to_string())
-    } else if status_keys.len() == 1 {
-        let key = status_keys.into_iter().next().unwrap();
-        if key == "none" {
+    let (status, status_key) =
+        if states.is_empty() || status_keys == std::iter::once("none".to_string()).collect() {
             (None, "none".to_string())
+        } else if status_keys.len() == 1 {
+            let key = status_keys.into_iter().next().unwrap();
+            if key == "none" {
+                (None, "none".to_string())
+            } else {
+                (Some(key.clone()), key)
+            }
         } else {
-            (Some(key.clone()), key)
-        }
-    } else {
-        (Some("mixed".to_string()), "mixed".to_string())
-    };
+            (Some("mixed".to_string()), "mixed".to_string())
+        };
 
     let latest_import_result = if states.len() == 1 {
         states[0].2.clone()
@@ -323,7 +354,10 @@ fn compute_browse_status(
     } else if manual_statuses.len() > 1 {
         String::new()
     } else {
-        states.first().map(|(_, m, _)| m.clone()).unwrap_or_default()
+        states
+            .first()
+            .map(|(_, m, _)| m.clone())
+            .unwrap_or_default()
     };
 
     BrowseStatus {
@@ -353,14 +387,22 @@ fn bucket_moved_imports(
     let dir_children: Vec<(String, PathBuf)> = listed
         .iter()
         .filter(|e| e.is_dir)
-        .map(|e| (e.relative_path.clone(), canonical_or_normalized(&e.absolute_path)))
+        .map(|e| {
+            (
+                e.relative_path.clone(),
+                canonical_or_normalized(&e.absolute_path),
+            )
+        })
         .collect();
     if dir_children.is_empty() {
         return buckets;
     }
     for row in state.db.latest_imports_under_prefix(&current_dir) {
         let path = PathBuf::from(row.source_path);
-        if let Some((rel, _)) = dir_children.iter().find(|(_, prefix)| path.starts_with(prefix)) {
+        if let Some((rel, _)) = dir_children
+            .iter()
+            .find(|(_, prefix)| path.starts_with(prefix))
+        {
             buckets.entry(rel.clone()).or_default().push(path);
         }
     }
@@ -385,6 +427,28 @@ async fn match_route(
     let media_type = payload.media_type.clone();
     let root_path = PathBuf::from(&root.path);
     let selected = payload.selected.clone();
+
+    // Music takes a separate path: audio files are grouped by (artist, album)
+    // read from ffprobe tags with a filename/folder fallback.
+    if media_type == "music" {
+        let expand_root = root_path.clone();
+        let expand_selected = selected.clone();
+        let groups = tokio::task::spawn_blocking(move || {
+            expand_grouped_audio(&expand_root, &expand_selected)
+        })
+        .await
+        .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| AppError::bad_request(e.to_string()))?;
+        let out_groups = build_music_groups(groups).await;
+        return Ok(Json(MatchResponse {
+            media_type: media_type.clone(),
+            output_root: state
+                .output_root_for(&media_type)
+                .map(|p| p.to_string_lossy().to_string()),
+            groups: out_groups,
+        }));
+    }
+
     let groups = tokio::task::spawn_blocking(move || expand_grouped(&root_path, &selected))
         .await
         .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -442,6 +506,131 @@ async fn match_route(
             .map(|p| p.to_string_lossy().to_string()),
         groups: out_groups,
     }))
+}
+
+/// Build music match groups from expanded audio file groups. Each track's
+/// artist/album/year is read from ffprobe `format` tags when available, falling
+/// back to the enclosing `<Artist>/<Album>` folder convention. Tracks are then
+/// regrouped by (artist, album) so one MatchGroup maps to one album.
+///
+/// Field mapping into the existing MatchGroup/MatchEpisode shape:
+///   MatchGroup.show_title = Artist, show_year = album Year, group_name = Album.
+///   MatchEpisode.season_number = 0, episode_number = 0, episode_title = Album.
+async fn build_music_groups(groups: Vec<crate::filesystem::FileGroup>) -> Vec<MatchGroup> {
+    // Track whether ffprobe ran at all so we can note when tags were skipped.
+    let mut ffprobe_seen = false;
+    // Preserve first-appearance order of (artist, album) keys.
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut by_album: HashMap<(String, String), MusicAlbumAccum> = HashMap::new();
+
+    for group in groups {
+        for gfile in &group.files {
+            let (parsed, probed) = resolve_music_track(&gfile.path).await;
+            if probed {
+                ffprobe_seen = true;
+            }
+            let key = (parsed.artist.clone(), parsed.album.clone());
+            let accum = by_album.entry(key.clone()).or_insert_with(|| {
+                order.push(key.clone());
+                MusicAlbumAccum {
+                    artist: parsed.artist.clone(),
+                    album: parsed.album.clone(),
+                    year: parsed.year,
+                    episodes: Vec::new(),
+                }
+            });
+            // First non-empty year wins for the album folder.
+            if accum.year.is_none() {
+                accum.year = parsed.year;
+            }
+            accum.episodes.push(MatchEpisode {
+                source_path: gfile.path.to_string_lossy().to_string(),
+                source_name: parsed.source_name.clone(),
+                season_number: 0,
+                episode_number: 0,
+                episode_title: parsed.album.clone(),
+                quality: String::new(),
+                parsed: ParsedMedia {
+                    source_name: parsed.source_name.clone(),
+                    title: parsed.title.clone(),
+                    year: parsed.year,
+                    season: 0,
+                    episode: 0,
+                    episode_title: parsed.album.clone(),
+                    quality: String::new(),
+                },
+            });
+        }
+    }
+
+    let metadata_error = if ffprobe_seen {
+        None
+    } else {
+        Some("ffprobe is unavailable; using filename/folder tags only.".to_string())
+    };
+
+    order
+        .into_iter()
+        .filter_map(|key| by_album.remove(&key))
+        .map(|accum| {
+            let group_name = crate::naming::show_folder_name(&accum.album, accum.year);
+            MatchGroup {
+                group_key: format!("{}\u{0}{}", accum.artist, accum.album),
+                group_name,
+                show_title: accum.artist,
+                show_year: accum.year,
+                provider: String::new(),
+                provider_show_id: String::new(),
+                candidates: Vec::new(),
+                metadata_error: metadata_error.clone(),
+                episodes: accum.episodes,
+            }
+        })
+        .collect()
+}
+
+struct MusicAlbumAccum {
+    artist: String,
+    album: String,
+    year: Option<i64>,
+    episodes: Vec<MatchEpisode>,
+}
+
+/// Resolve a single audio track's artist/album/year/title. Prefers ffprobe
+/// `format` tags, then falls back to the `<Artist>/<Album>` folder convention
+/// and the filename. Returns the parsed values and whether ffprobe produced any
+/// usable tag (used to surface a "ffprobe missing" note).
+async fn resolve_music_track(path: &Path) -> (crate::parser::ParsedMusic, bool) {
+    let probe_path = path.to_path_buf();
+    let tags = tokio::task::spawn_blocking(move || crate::ffprobe::probe_music_tags(&probe_path))
+        .await
+        .unwrap_or_default();
+    let probed = tags.artist.is_some() || tags.album.is_some() || tags.year.is_some();
+
+    // Folder fallback: parent dir is the album, grandparent is the artist.
+    let folder_album = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string());
+    let folder_artist = path
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string());
+
+    let mut parsed =
+        crate::parser::parse_music_file(path, folder_artist.as_deref(), folder_album.as_deref());
+    // ffprobe tags take precedence over the folder/filename fallback.
+    if let Some(artist) = tags.artist {
+        parsed.artist = artist;
+    }
+    if let Some(album) = tags.album {
+        parsed.album = album.clone();
+    }
+    if let Some(year) = tags.year {
+        parsed.year = Some(year);
+    }
+    (parsed, probed)
 }
 
 /// Resolve quality via ffprobe for a single file when the filename lacked a token.
@@ -507,7 +696,11 @@ async fn enrich_group(
             let key = format!("{}:{}", media_type, candidate.provider_id);
             match episode_cache.get(&key) {
                 Some(cached) => cached.clone(),
-                None => match state.providers.episodes(media_type, &candidate.provider_id).await {
+                None => match state
+                    .providers
+                    .episodes(media_type, &candidate.provider_id)
+                    .await
+                {
                     Ok(found) => {
                         episode_cache.insert(key, found.clone());
                         found
@@ -527,14 +720,9 @@ async fn enrich_group(
 
     let mut out_episodes = Vec::new();
     for gfile in &group.files {
-        let segments: Vec<&str> = gfile
-            .relative_segments
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
+        let segments: Vec<&str> = gfile.relative_segments.iter().map(|s| s.as_str()).collect();
         let season_hint = crate::parser::season_from_segments(&segments);
-        let mut parsed =
-            crate::parser::parse_folder_episode(&gfile.path, &show_title, season_hint);
+        let mut parsed = crate::parser::parse_folder_episode(&gfile.path, &show_title, season_hint);
         parsed.quality = probe_quality_fallback(&gfile.path, &parsed.quality).await;
 
         let episode_title = episodes
@@ -566,7 +754,10 @@ async fn enrich_group(
         group_name: group.group_name,
         show_title,
         show_year,
-        provider: selected.as_ref().map(|c| c.provider.clone()).unwrap_or_default(),
+        provider: selected
+            .as_ref()
+            .map(|c| c.provider.clone())
+            .unwrap_or_default(),
         provider_show_id: selected.map(|c| c.provider_id).unwrap_or_default(),
         candidates,
         metadata_error,
@@ -684,7 +875,10 @@ async fn get_import_job(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> AppResult<Json<Value>> {
-    let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
+    let job = state
+        .jobs
+        .get(&id)
+        .ok_or_else(|| AppError::not_found("Import job not found"))?;
     Ok(Json(snapshot_json(&job)))
 }
 
@@ -692,7 +886,10 @@ async fn cancel_import_item(
     State(state): State<AppState>,
     AxumPath((id, index)): AxumPath<(String, usize)>,
 ) -> AppResult<Json<Value>> {
-    let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
+    let job = state
+        .jobs
+        .get(&id)
+        .ok_or_else(|| AppError::not_found("Import job not found"))?;
     job.request_cancel_item(index);
     Ok(Json(snapshot_json(&job)))
 }
@@ -701,7 +898,10 @@ async fn cancel_import_job(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> AppResult<Json<Value>> {
-    let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
+    let job = state
+        .jobs
+        .get(&id)
+        .ok_or_else(|| AppError::not_found("Import job not found"))?;
     job.request_cancel();
     Ok(Json(snapshot_json(&job)))
 }
@@ -710,7 +910,10 @@ async fn import_job_results(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> AppResult<Json<Value>> {
-    let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
+    let job = state
+        .jobs
+        .get(&id)
+        .ok_or_else(|| AppError::not_found("Import job not found"))?;
     if !job.is_finished() {
         return Err(AppError::conflict("Import job is not done"));
     }
@@ -739,15 +942,21 @@ fn build_import_requests(state: &AppState, batch: &ImportBatch) -> AppResult<Vec
     if !is_valid_conflict_policy(&batch.conflict_policy) {
         return Err(AppError::bad_request("Invalid conflict policy"));
     }
-    let output_root = state
-        .output_root_for(&batch.media_type)
-        .ok_or_else(|| AppError::bad_request(format!("No {} output root configured", batch.media_type)))?;
+    let output_root = state.output_root_for(&batch.media_type).ok_or_else(|| {
+        AppError::bad_request(format!("No {} output root configured", batch.media_type))
+    })?;
 
-    let input_roots: Vec<PathBuf> = state.db.list_input_roots().into_iter().map(|r| PathBuf::from(r.path)).collect();
+    let input_roots: Vec<PathBuf> = state
+        .db
+        .list_input_roots()
+        .into_iter()
+        .map(|r| PathBuf::from(r.path))
+        .collect();
     let mut requests = Vec::new();
     for item in &batch.items {
         let source = canonical_or_normalized(&PathBuf::from(&item.source_path));
         assert_source_allowed(&source, &input_roots)?;
+        let origin = origin_relative_path(&source, &input_roots);
         requests.push(ImportRequest {
             source_path: source,
             output_root: output_root.clone(),
@@ -762,9 +971,31 @@ fn build_import_requests(state: &AppState, batch: &ImportBatch) -> AppResult<Vec
             conflict_policy: batch.conflict_policy.clone(),
             provider: item.provider.clone().filter(|s| !s.is_empty()),
             provider_show_id: item.provider_show_id.clone().filter(|s| !s.is_empty()),
+            origin,
         });
     }
     Ok(requests)
+}
+
+/// Derive the source's original path relative to whichever input root contains
+/// it (folder structure preserved), e.g. "Spiderman/Saison 01/episode-01.mkv".
+/// Falls back to just the file name when no root matches or stripping yields an
+/// empty path.
+fn origin_relative_path(source: &Path, input_roots: &[PathBuf]) -> String {
+    let file_name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    for root in input_roots {
+        let root = canonical_or_normalized(root);
+        if let Ok(rel) = source.strip_prefix(&root) {
+            let rel = rel.to_string_lossy().to_string();
+            if !rel.is_empty() {
+                return rel;
+            }
+        }
+    }
+    file_name
 }
 
 fn assert_source_allowed(source: &Path, input_roots: &[PathBuf]) -> AppResult<()> {
@@ -877,19 +1108,36 @@ async fn source_status(
     if !crate::state::SOURCE_STATUSES.contains(&payload.status.as_str()) {
         return Err(AppError::bad_request("Invalid status"));
     }
-    state.db.set_source_status_overrides(&sources, Some(&payload.status));
-    Ok(Json(json!({ "status": payload.status, "updated": sources.len() })))
+    state
+        .db
+        .set_source_status_overrides(&sources, Some(&payload.status));
+    Ok(Json(
+        json!({ "status": payload.status, "updated": sources.len() }),
+    ))
 }
 
-fn status_update_sources(state: &AppState, payload: &SourceStatusPayload) -> AppResult<Vec<PathBuf>> {
-    let input_roots: Vec<PathBuf> = state.db.list_input_roots().into_iter().map(|r| PathBuf::from(r.path)).collect();
+fn status_update_sources(
+    state: &AppState,
+    payload: &SourceStatusPayload,
+) -> AppResult<Vec<PathBuf>> {
+    let input_roots: Vec<PathBuf> = state
+        .db
+        .list_input_roots()
+        .into_iter()
+        .map(|r| PathBuf::from(r.path))
+        .collect();
     if let Some(source_path) = &payload.source_path {
         let source = canonical_or_normalized(&PathBuf::from(source_path));
         assert_source_allowed(&source, &input_roots)?;
         return Ok(vec![source]);
     }
-    let root_id = payload.root_id.ok_or_else(|| AppError::bad_request("Input root is required"))?;
-    let root = state.db.get_input_root(root_id).ok_or_else(|| AppError::not_found("Input root not found"))?;
+    let root_id = payload
+        .root_id
+        .ok_or_else(|| AppError::bad_request("Input root is required"))?;
+    let root = state
+        .db
+        .get_input_root(root_id)
+        .ok_or_else(|| AppError::not_found("Input root not found"))?;
     expand_source_files(&PathBuf::from(&root.path), &payload.selected)
         .map_err(|e| AppError::bad_request(e.to_string()))
 }
@@ -914,18 +1162,28 @@ fn folders_blocking(path: &str) -> AppResult<FoldersResponse> {
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|p| p.is_dir())
         .collect();
-    children.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default());
+    children.sort_by_key(|p| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
 
     let folders: Vec<FolderEntry> = children
         .into_iter()
         .filter(|p| std::fs::metadata(p).is_ok())
         .map(|p| FolderEntry {
-            name: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            name: p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
             path: p.to_string_lossy().to_string(),
         })
         .collect();
 
-    let parent = current.parent().filter(|p| *p != current).map(|p| p.to_string_lossy().to_string());
+    let parent = current
+        .parent()
+        .filter(|p| *p != current)
+        .map(|p| p.to_string_lossy().to_string());
     let roots: Vec<String> = PICKER_ROOTS
         .iter()
         .filter(|root| Path::new(root).exists())
@@ -943,10 +1201,16 @@ fn folders_blocking(path: &str) -> AppResult<FoldersResponse> {
 fn resolve_picker_path(value: &str) -> AppResult<PathBuf> {
     let path = canonical_or_normalized(&expand_user(if value.is_empty() { "/" } else { value }));
     if !path.exists() {
-        return Err(AppError::not_found(format!("Folder does not exist: {}", path.display())));
+        return Err(AppError::not_found(format!(
+            "Folder does not exist: {}",
+            path.display()
+        )));
     }
     if !path.is_dir() {
-        return Err(AppError::bad_request(format!("Path is not a folder: {}", path.display())));
+        return Err(AppError::bad_request(format!(
+            "Path is not a folder: {}",
+            path.display()
+        )));
     }
     Ok(path)
 }
@@ -971,7 +1235,9 @@ fn expand_user(value: &str) -> PathBuf {
 }
 
 fn normalize_path(value: &str) -> String {
-    canonical_or_normalized(&expand_user(value)).to_string_lossy().to_string()
+    canonical_or_normalized(&expand_user(value))
+        .to_string_lossy()
+        .to_string()
 }
 
 fn normalize_optional(value: &str) -> String {
@@ -991,7 +1257,10 @@ fn normalize_copy_rate_limit(value: &str) -> String {
         format!("{}", limit as i64)
     } else {
         let formatted = format!("{limit:.2}");
-        formatted.trim_end_matches('0').trim_end_matches('.').to_string()
+        formatted
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
     }
 }
 

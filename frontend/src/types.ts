@@ -1,4 +1,4 @@
-export type MediaType = "tv" | "anime" | "film";
+export type MediaType = "tv" | "anime" | "film" | "music";
 
 export interface InputRoot {
   id: number;
@@ -17,6 +17,7 @@ export interface Settings {
   tv_output_root: string;
   anime_output_root: string;
   film_output_root: string;
+  music_output_root: string;
   copy_rate_limit_mbps: string;
   checks: PermissionCheck[];
 }

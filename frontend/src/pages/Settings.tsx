@@ -8,7 +8,8 @@ type PickerTarget =
   | { kind: "input" }
   | { kind: "tv" }
   | { kind: "anime" }
-  | { kind: "film" };
+  | { kind: "film" }
+  | { kind: "music" };
 
 export default function SettingsPage() {
   const progress = useProgress();
@@ -16,6 +17,7 @@ export default function SettingsPage() {
   const [tvRoot, setTvRoot] = useState("");
   const [animeRoot, setAnimeRoot] = useState("");
   const [filmRoot, setFilmRoot] = useState("");
+  const [musicRoot, setMusicRoot] = useState("");
   const [copyRate, setCopyRate] = useState("15");
   const [checks, setChecks] = useState<PermissionCheck[]>([]);
   const [saved, setSaved] = useState(false);
@@ -30,6 +32,7 @@ export default function SettingsPage() {
         setTvRoot(settings.tv_output_root);
         setAnimeRoot(settings.anime_output_root);
         setFilmRoot(settings.film_output_root);
+        setMusicRoot(settings.music_output_root);
         setCopyRate(settings.copy_rate_limit_mbps);
         setChecks(settings.checks);
       })
@@ -50,6 +53,7 @@ export default function SettingsPage() {
         tv_output_root: tvRoot,
         anime_output_root: animeRoot,
         film_output_root: filmRoot,
+        music_output_root: musicRoot,
         copy_rate_limit_mbps: copyRate,
       });
       setSaved(true);
@@ -68,7 +72,8 @@ export default function SettingsPage() {
     }
     if (picker.kind === "tv") return tvRoot || "/mnt";
     if (picker.kind === "anime") return animeRoot || "/mnt";
-    return filmRoot || "/mnt";
+    if (picker.kind === "film") return filmRoot || "/mnt";
+    return musicRoot || "/mnt";
   }
 
   function handleChoose(path: string) {
@@ -81,8 +86,10 @@ export default function SettingsPage() {
       setTvRoot(path);
     } else if (picker.kind === "anime") {
       setAnimeRoot(path);
-    } else {
+    } else if (picker.kind === "film") {
       setFilmRoot(path);
+    } else {
+      setMusicRoot(path);
     }
     setPicker(null);
   }
@@ -137,6 +144,18 @@ export default function SettingsPage() {
         </label>
         <button className="secondary-button" type="button" onClick={() => setPicker({ kind: "film" })}>
           Browse Film Output Root
+        </button>
+
+        <label>
+          Music output root
+          <input
+            value={musicRoot}
+            placeholder="/mnt/media/Music"
+            onChange={(e) => setMusicRoot(e.target.value)}
+          />
+        </label>
+        <button className="secondary-button" type="button" onClick={() => setPicker({ kind: "music" })}>
+          Browse Music Output Root
         </button>
 
         <label>

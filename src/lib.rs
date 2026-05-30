@@ -112,8 +112,8 @@ pub fn spawn_embedded() -> SocketAddr {
             listener
                 .set_nonblocking(true)
                 .expect("failed to set listener non-blocking");
-            let listener = tokio::net::TcpListener::from_std(listener)
-                .expect("failed to adopt std listener");
+            let listener =
+                tokio::net::TcpListener::from_std(listener).expect("failed to adopt std listener");
             axum::serve(listener, app)
                 .await
                 .expect("embedded server error");

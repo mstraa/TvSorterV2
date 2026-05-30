@@ -5,6 +5,10 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     "avi", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ts", "webm", "wmv",
 ];
 
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "wma", "alac",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum FsError {
     #[error("Path is outside the configured root")]
@@ -91,17 +95,25 @@ pub fn size_and_mtime(path: &Path) -> Option<(i64, Option<f64>)> {
     Some((meta.len() as i64, mtime_secs(&meta)))
 }
 
-pub fn is_video_file(path: &Path) -> bool {
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     if !path.is_file() {
         return false;
     }
     match path.extension() {
         Some(ext) => {
             let ext = ext.to_string_lossy().to_lowercase();
-            VIDEO_EXTENSIONS.contains(&ext.as_str())
+            extensions.contains(&ext.as_str())
         }
         None => false,
     }
+}
+
+pub fn is_video_file(path: &Path) -> bool {
+    has_extension(path, VIDEO_EXTENSIONS)
+}
+
+pub fn is_audio_file(path: &Path) -> bool {
+    has_extension(path, AUDIO_EXTENSIONS)
 }
 
 pub fn list_directory(root: &Path, relative_path: &str) -> Result<Vec<BrowserEntry>, FsError> {
@@ -111,7 +123,9 @@ pub fn list_directory(root: &Path, relative_path: &str) -> Result<Vec<BrowserEnt
     }
     let root_c = canonical_or_normalized(root);
     let read = fs::read_dir(&directory).map_err(|e| FsError::Io(e.to_string()))?;
-    let mut children: Vec<PathBuf> = read.filter_map(|entry| entry.ok().map(|e| e.path())).collect();
+    let mut children: Vec<PathBuf> = read
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .collect();
     children.sort_by(|a, b| {
         let a_dir = a.is_dir();
         let b_dir = b.is_dir();
@@ -204,7 +218,10 @@ fn expand_files(
     Ok(files)
 }
 
-pub fn expand_source_files(root: &Path, relative_paths: &[String]) -> Result<Vec<PathBuf>, FsError> {
+pub fn expand_source_files(
+    root: &Path,
+    relative_paths: &[String],
+) -> Result<Vec<PathBuf>, FsError> {
     expand_files(root, relative_paths, false)
 }
 
@@ -269,6 +286,23 @@ fn push_into_group(
 /// selected files are grouped under their parent folder. Order of first
 /// appearance is preserved; files within a group are sorted by path.
 pub fn expand_grouped(root: &Path, relative_paths: &[String]) -> Result<Vec<FileGroup>, FsError> {
+    expand_grouped_with(root, relative_paths, &is_video_file)
+}
+
+/// Like [`expand_grouped`], but collects audio files (for the "music" media
+/// type) instead of video files.
+pub fn expand_grouped_audio(
+    root: &Path,
+    relative_paths: &[String],
+) -> Result<Vec<FileGroup>, FsError> {
+    expand_grouped_with(root, relative_paths, &is_audio_file)
+}
+
+fn expand_grouped_with(
+    root: &Path,
+    relative_paths: &[String],
+    keep: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<FileGroup>, FsError> {
     let root_c = canonical_or_normalized(root);
     let mut order: Vec<String> = Vec::new();
     let mut groups: std::collections::HashMap<String, FileGroup> = std::collections::HashMap::new();
@@ -283,7 +317,7 @@ pub fn expand_grouped(root: &Path, relative_paths: &[String]) -> Result<Vec<File
             collect_files(&target, &|p| p.is_file(), &mut candidates);
             candidates.sort();
             for candidate in candidates {
-                if !is_video_file(&candidate) {
+                if !keep(&candidate) {
                     continue;
                 }
                 let resolved = canonical_or_normalized(&candidate);
@@ -302,7 +336,7 @@ pub fn expand_grouped(root: &Path, relative_paths: &[String]) -> Result<Vec<File
                     },
                 );
             }
-        } else if target.is_file() && is_video_file(&target) {
+        } else if target.is_file() && keep(&target) {
             let resolved = canonical_or_normalized(&target);
             if !seen.insert(resolved.clone()) {
                 continue;

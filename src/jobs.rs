@@ -90,7 +90,11 @@ fn build_item(index: usize, request: &ImportRequest) -> JobItem {
 }
 
 fn make_label(media_type: &str, total_items: usize) -> String {
-    let media = if media_type.is_empty() { "media" } else { media_type };
+    let media = if media_type.is_empty() {
+        "media"
+    } else {
+        media_type
+    };
     format!(
         "{media} · {total_items} item{}",
         if total_items == 1 { "" } else { "s" }
@@ -243,8 +247,7 @@ impl JobManager {
 
     /// All jobs, newest first.
     pub fn list(&self) -> Vec<Arc<Job>> {
-        let mut jobs: Vec<Arc<Job>> =
-            self.jobs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut jobs: Vec<Arc<Job>> = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).clone();
         jobs.sort_by_key(|j| std::cmp::Reverse(j.seq));
         jobs
     }
@@ -386,7 +389,12 @@ fn run_job(state: Arc<Mutex<JobState>>, db: Database, copy_rate_limit_mbps: Opti
         // Capture source stat before the import runs: a `move` deletes the
         // source, so it must be read up front to be recorded.
         let source_stat = stat_source(&request.source_path);
-        let result = execute_import(request, Some(&progress), copy_rate_limit_mbps, Some(&cancel));
+        let result = execute_import(
+            request,
+            Some(&progress),
+            copy_rate_limit_mbps,
+            Some(&cancel),
+        );
         db.insert_import(&result_to_record(&result, source_stat));
 
         {

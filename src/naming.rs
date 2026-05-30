@@ -2,8 +2,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
-static INVALID_CHARS: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"[<>:"/\\|?*\x00-\x1f]"#).unwrap());
+static INVALID_CHARS: Lazy<Regex> = Lazy::new(|| Regex::new(r#"[<>:"/\\|?*\x00-\x1f]"#).unwrap());
 static WHITESPACE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 
 pub fn sanitize_component(value: &str) -> String {
@@ -86,6 +85,26 @@ pub fn film_destination_path(
     output_root.join(filename)
 }
 
+/// Build the destination for an audio track:
+/// `<output_root>/<Artist>/<Album> (<Year>)/<original filename>`. The album
+/// folder drops the ` (Year)` suffix when no year is known. The track keeps its
+/// ORIGINAL filename unchanged (only the directory components are sanitized).
+pub fn music_destination_path(
+    output_root: &Path,
+    artist: &str,
+    album: &str,
+    year: Option<i64>,
+    source_path: &Path,
+) -> PathBuf {
+    let artist_dir = sanitize_component(artist);
+    let album_dir = show_folder_name(album, year);
+    let filename = source_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+    output_root.join(artist_dir).join(album_dir).join(filename)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,7 +124,9 @@ mod tests {
         );
         assert_eq!(
             path,
-            PathBuf::from("/out/TV/Fringe (2008)/Season 01/Fringe (2008) - S01E01 - Pilot - 1080p.mkv")
+            PathBuf::from(
+                "/out/TV/Fringe (2008)/Season 01/Fringe (2008) - S01E01 - Pilot - 1080p.mkv"
+            )
         );
     }
 
@@ -121,6 +142,36 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("/out/Films/Blade Runner 2049 (2017) - 2160p.mkv")
+        );
+    }
+
+    #[test]
+    fn builds_music_destination_with_year() {
+        let path = music_destination_path(
+            &PathBuf::from("/out/Music"),
+            "Daft Punk",
+            "Discovery",
+            Some(2001),
+            &PathBuf::from("/in/Daft Punk/Discovery/01 - One More Time.flac"),
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/out/Music/Daft Punk/Discovery (2001)/01 - One More Time.flac")
+        );
+    }
+
+    #[test]
+    fn builds_music_destination_without_year() {
+        let path = music_destination_path(
+            &PathBuf::from("/out/Music"),
+            "Unknown Artist",
+            "Singles",
+            None,
+            &PathBuf::from("track.mp3"),
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/out/Music/Unknown Artist/Singles/track.mp3")
         );
     }
 

@@ -19,6 +19,7 @@ pub struct SettingsResponse {
     pub tv_output_root: String,
     pub anime_output_root: String,
     pub film_output_root: String,
+    pub music_output_root: String,
     pub copy_rate_limit_mbps: String,
     pub checks: Vec<PermissionCheck>,
 }
@@ -33,6 +34,8 @@ pub struct SettingsPayload {
     pub anime_output_root: String,
     #[serde(default)]
     pub film_output_root: String,
+    #[serde(default)]
+    pub music_output_root: String,
     #[serde(default = "default_rate")]
     pub copy_rate_limit_mbps: String,
 }

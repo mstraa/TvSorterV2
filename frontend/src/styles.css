@@ -904,6 +904,30 @@ details summary {
   width: 36px;
 }
 
+.episode-table .col-include {
+  width: 32px;
+}
+
+.col-include {
+  text-align: center;
+}
+
+.include-checkbox {
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.group-include {
+  margin-right: 0.25rem;
+}
+
+.episode-row.excluded-row td,
+.film-row.excluded-row .film-title,
+.film-row.excluded-row .col-quality {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 .col-code {
   font-family: var(--mono);
   white-space: nowrap;

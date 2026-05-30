@@ -6,7 +6,6 @@ import BrowsePage from "./pages/Browse";
 import MatchPage from "./pages/Match";
 import ImportsPage from "./pages/Imports";
 import ResultsPage from "./pages/Results";
-import LibraryPage from "./pages/Library";
 import HistoryPage from "./pages/History";
 import SettingsPage from "./pages/Settings";
 import { toggleTheme, type Theme } from "./theme";
@@ -14,7 +13,6 @@ import { toggleTheme, type Theme } from "./theme";
 const NAV = [
   { to: "/browse", label: "Browse", hint: "input" },
   { to: "/imports", label: "Imports", hint: "jobs" },
-  { to: "/library", label: "Library", hint: "output" },
   { to: "/history", label: "History", hint: "log" },
   { to: "/settings", label: "Settings", hint: "config" },
 ];
@@ -73,10 +71,6 @@ export default function App() {
           </nav>
 
           <div className="sidebar-bottom">
-            <div className="connection live">
-              <span className="connection-dot" />
-              LAN · hardlink / copy / move
-            </div>
             <button
               className="secondary-button theme-toggle"
               type="button"
@@ -94,7 +88,6 @@ export default function App() {
             <Route path="/match" element={<MatchPage />} />
             <Route path="/imports" element={<ImportsPage />} />
             <Route path="/results/:jobId" element={<ResultsPage />} />
-            <Route path="/library" element={<LibraryPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/browse" replace />} />

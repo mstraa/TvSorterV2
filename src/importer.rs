@@ -6,12 +6,16 @@ use std::time::Instant;
 use serde::Serialize;
 
 use crate::db::ImportRecord;
-use crate::naming::{destination_path, film_destination_path};
+use crate::naming::{destination_path, film_destination_path, music_destination_path};
 
 // errno values shared by Linux and macOS.
 const EXDEV: i32 = 18;
 const EACCES: i32 = 13;
 const EPERM: i32 = 1;
+
+/// Extended-attribute name under which the source's original relative path is
+/// recorded on copied/moved destination files.
+const ORIGIN_XATTR: &str = "user.tvsorter.origin";
 
 #[derive(Clone, Debug)]
 pub struct ImportRequest {
@@ -28,6 +32,10 @@ pub struct ImportRequest {
     pub conflict_policy: String,
     pub provider: Option<String>,
     pub provider_show_id: Option<String>,
+    /// Source path relative to its input root (folder structure included), e.g.
+    /// "Spiderman/Saison 01/episode-01.mkv". Written to the destination file as
+    /// the `user.tvsorter.origin` extended attribute after a copy/move.
+    pub origin: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -43,7 +51,12 @@ pub struct ImportResult {
 
 // `request` is not serialized; expose just the fields the UI needs.
 impl ImportResult {
-    fn new(request: ImportRequest, output_path: PathBuf, final_path: PathBuf, result: &str) -> Self {
+    fn new(
+        request: ImportRequest,
+        output_path: PathBuf,
+        final_path: PathBuf,
+        result: &str,
+    ) -> Self {
         Self {
             source_path: request.source_path.to_string_lossy().to_string(),
             output_path: output_path.to_string_lossy().to_string(),
@@ -86,7 +99,16 @@ enum CopyStep {
 }
 
 pub fn build_destination(request: &ImportRequest) -> PathBuf {
-    if request.media_type == "film" {
+    if request.media_type == "music" {
+        // For music: show_title=Artist, episode_title=Album, show_year=Year.
+        music_destination_path(
+            &request.output_root,
+            &request.show_title,
+            &request.episode_title,
+            request.show_year,
+            &request.source_path,
+        )
+    } else if request.media_type == "film" {
         film_destination_path(
             &request.output_root,
             &request.show_title,
@@ -288,8 +310,36 @@ pub fn execute_import(
         }
     }
 
+    // Record the source's original relative path on copied/moved files. Hardlinks
+    // share the source inode (and its xattrs) so they are intentionally excluded;
+    // the "test" action never reaches here. xattr failures must not fail the
+    // import — they are logged and ignored.
+    if action == "copy" || action == "move" {
+        write_origin_xattr(&final_path, &request.origin);
+    }
+
     ImportResult::new(request, output_path, final_path, "imported")
 }
+
+/// Write the source's original relative path to the destination file as the
+/// `user.tvsorter.origin` extended attribute. Best-effort: any failure (e.g. a
+/// filesystem that does not support user xattrs) is logged and ignored so it
+/// never fails an otherwise-successful import.
+#[cfg(unix)]
+fn write_origin_xattr(path: &Path, origin: &str) {
+    if origin.is_empty() {
+        return;
+    }
+    if let Err(err) = xattr::set(path, ORIGIN_XATTR, origin.as_bytes()) {
+        tracing::warn!(
+            "failed to set {ORIGIN_XATTR} xattr on {}: {err}",
+            path.display()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn write_origin_xattr(_path: &Path, _origin: &str) {}
 
 fn cancelled(cancel: Option<CancelFn<'_>>) -> bool {
     cancel.map(|c| c()).unwrap_or(false)
@@ -369,9 +419,7 @@ fn copy_with_progress(
             let expected = copied as f64 / bps;
             let actual = started_at.elapsed().as_secs_f64();
             if expected > actual {
-                if let CopyOutcome::Cancelled =
-                    sleep_until_next_chunk(expected - actual, cancel)
-                {
+                if let CopyOutcome::Cancelled = sleep_until_next_chunk(expected - actual, cancel) {
                     return Ok(CopyOutcome::Cancelled);
                 }
             }
@@ -534,6 +582,10 @@ mod tests {
     }
 
     fn request(source: PathBuf, output_root: PathBuf, action: &str, policy: &str) -> ImportRequest {
+        let source_name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         ImportRequest {
             source_path: source,
             output_root,
@@ -548,6 +600,7 @@ mod tests {
             conflict_policy: policy.to_string(),
             provider: None,
             provider_show_id: None,
+            origin: source_name,
         }
     }
 
@@ -558,9 +611,56 @@ mod tests {
         let mut f = File::create(&source).unwrap();
         f.write_all(b"hello world").unwrap();
         let out = dir.join("out");
-        let result = execute_import(request(source, out.clone(), "copy", "skip"), None, None, None);
+        let result = execute_import(
+            request(source, out.clone(), "copy", "skip"),
+            None,
+            None,
+            None,
+        );
         assert_eq!(result.result, "imported");
         assert!(PathBuf::from(&result.final_path).exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn copy_sets_origin_xattr() {
+        let dir = temp_dir();
+        let source = dir.join("src.mkv");
+        File::create(&source)
+            .unwrap()
+            .write_all(b"hello world")
+            .unwrap();
+        let out = dir.join("out");
+        let mut req = request(source, out, "copy", "skip");
+        req.origin = "Spiderman/Saison 01/src.mkv".to_string();
+        let result = execute_import(req, None, None, None);
+        assert_eq!(result.result, "imported");
+        let dest = PathBuf::from(&result.final_path);
+
+        // The temp filesystem may not support user xattrs; tolerate that by
+        // only asserting when a probe write succeeds, but assert the value when
+        // xattrs are supported.
+        let supported = xattr::set(&dest, ORIGIN_XATTR, b"probe").is_ok();
+        if supported {
+            // Re-run is unnecessary; the import already wrote it, but our probe
+            // overwrote the value — restore via another import to validate the
+            // real code path end to end.
+            let value = xattr::get(&dest, ORIGIN_XATTR).unwrap();
+            // Probe value present confirms xattr round-trips; now verify the
+            // importer's own write by re-importing to a fresh destination.
+            assert!(value.is_some());
+            let dir2 = temp_dir();
+            let source2 = dir2.join("track.mkv");
+            File::create(&source2).unwrap().write_all(b"x").unwrap();
+            let mut req2 = request(source2, dir2.join("out"), "copy", "skip");
+            req2.origin = "Album/01.mkv".to_string();
+            let r2 = execute_import(req2, None, None, None);
+            let dest2 = PathBuf::from(&r2.final_path);
+            let got = xattr::get(&dest2, ORIGIN_XATTR).unwrap();
+            assert_eq!(got.as_deref(), Some(b"Album/01.mkv".as_ref()));
+            fs::remove_dir_all(&dir2).ok();
+        }
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -570,7 +670,12 @@ mod tests {
         let source = dir.join("src.mkv");
         File::create(&source).unwrap().write_all(b"x").unwrap();
         let out = dir.join("out");
-        let first = execute_import(request(source.clone(), out.clone(), "copy", "skip"), None, None, None);
+        let first = execute_import(
+            request(source.clone(), out.clone(), "copy", "skip"),
+            None,
+            None,
+            None,
+        );
         assert_eq!(first.result, "imported");
         let second = execute_import(request(source, out, "copy", "skip"), None, None, None);
         assert_eq!(second.result, "skipped");
@@ -583,7 +688,12 @@ mod tests {
         let source = dir.join("src.mkv");
         File::create(&source).unwrap().write_all(b"x").unwrap();
         let out = dir.join("out");
-        execute_import(request(source.clone(), out.clone(), "copy", "skip"), None, None, None);
+        execute_import(
+            request(source.clone(), out.clone(), "copy", "skip"),
+            None,
+            None,
+            None,
+        );
         let indexed = execute_import(request(source, out, "copy", "index"), None, None, None);
         assert_eq!(indexed.result, "imported");
         assert!(indexed.final_path.contains("(2)"));
@@ -595,7 +705,12 @@ mod tests {
         let dir = temp_dir();
         let source = dir.join("src.mkv");
         File::create(&source).unwrap().write_all(b"x").unwrap();
-        let result = execute_import(request(source, dir.join("out"), "test", "skip"), None, None, None);
+        let result = execute_import(
+            request(source, dir.join("out"), "test", "skip"),
+            None,
+            None,
+            None,
+        );
         assert_eq!(result.result, "preview");
         fs::remove_dir_all(&dir).ok();
     }
@@ -604,9 +719,17 @@ mod tests {
     fn move_removes_source() {
         let dir = temp_dir();
         let source = dir.join("src.mkv");
-        File::create(&source).unwrap().write_all(b"hello world").unwrap();
+        File::create(&source)
+            .unwrap()
+            .write_all(b"hello world")
+            .unwrap();
         let out = dir.join("out");
-        let result = execute_import(request(source.clone(), out, "move", "skip"), None, None, None);
+        let result = execute_import(
+            request(source.clone(), out, "move", "skip"),
+            None,
+            None,
+            None,
+        );
         assert_eq!(result.result, "imported");
         assert!(PathBuf::from(&result.final_path).exists());
         assert!(!source.exists(), "source should be gone after a move");
@@ -617,11 +740,19 @@ mod tests {
     fn move_record_keeps_source_stat_captured_before_run() {
         let dir = temp_dir();
         let source = dir.join("src.mkv");
-        File::create(&source).unwrap().write_all(b"hello world").unwrap();
+        File::create(&source)
+            .unwrap()
+            .write_all(b"hello world")
+            .unwrap();
         // Stat must be captured before the move deletes the source; statting
         // after would yield all-None.
         let stat = stat_source(&source);
-        let result = execute_import(request(source.clone(), dir.join("out"), "move", "skip"), None, None, None);
+        let result = execute_import(
+            request(source.clone(), dir.join("out"), "move", "skip"),
+            None,
+            None,
+            None,
+        );
         assert!(!source.exists());
         let record = result_to_record(&result, stat);
         assert_eq!(record.source_size, Some(11));

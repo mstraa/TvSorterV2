@@ -15,7 +15,10 @@ pub fn human_file_size(size: Option<i64>) -> String {
     let decimals = if unit_index <= 2 { 0 } else { 2 };
     let formatted = format!("{value:.decimals$}");
     let trimmed = if formatted.contains('.') {
-        formatted.trim_end_matches('0').trim_end_matches('.').to_string()
+        formatted
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
     } else {
         formatted
     };

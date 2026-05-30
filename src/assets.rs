@@ -17,7 +17,11 @@ pub async fn static_handler(uri: Uri) -> Response {
     match FrontendAssets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], content.data.into_owned()).into_response()
+            (
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content.data.into_owned(),
+            )
+                .into_response()
         }
         // SPA fallback: unknown non-asset routes return index.html so the
         // client-side router can handle them.

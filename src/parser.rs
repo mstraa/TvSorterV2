@@ -16,15 +16,20 @@ static YEAR_RE: Lazy<Regex> =
 static YEAR_TOKEN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:19|20)\d{2}").unwrap());
 // `(?:v\d{1,2})?` tolerates anime version suffixes glued to the episode number
 // (e.g. "05v2"), so the right episode is detected instead of falling through.
-static SXXEYY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})(?:v\d{1,2})?\b").unwrap());
-static ONE_X_TWO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})(?:v\d{1,2})?\b").unwrap());
-static EYY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:^|[\s._-])E(?P<episode>\d{1,3})(?:v\d{1,2})?(?:$|[\s._-])").unwrap());
+static SXXEYY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})(?:v\d{1,2})?\b").unwrap()
+});
+static ONE_X_TWO_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})(?:v\d{1,2})?\b").unwrap()
+});
+static EYY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:^|[\s._-])E(?P<episode>\d{1,3})(?:v\d{1,2})?(?:$|[\s._-])").unwrap()
+});
 static SEASON_EP_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\bseason[\s._-]*(?P<season>\d{1,2})[\s._-]*episode[\s._-]*(?P<episode>\d{1,3})\b")
-        .unwrap()
+    Regex::new(
+        r"(?i)\bseason[\s._-]*(?P<season>\d{1,2})[\s._-]*episode[\s._-]*(?P<episode>\d{1,3})\b",
+    )
+    .unwrap()
 });
 static BRACKETS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\[\](){}]").unwrap());
 static SEPARATORS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[._-]+").unwrap());
@@ -43,12 +48,14 @@ static EP_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(?:episode|épisode|ep|e|ova|oav|oad|#)[\s._-]*0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?\b")
         .unwrap()
 });
-static LEADING_NUM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[\s._-]*0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?(?:$|[\s._-])").unwrap());
+static LEADING_NUM_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^[\s._-]*0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?(?:$|[\s._-])").unwrap()
+});
 // A standalone number, optionally with a version suffix ("05v2") so the "v"
 // doesn't block the match.
-static STANDALONE_NUM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(?:^|[\s._-])0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?(?:$|[\s._-])").unwrap());
+static STANDALONE_NUM_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:^|[\s._-])0*(?P<episode>\d{1,3})(?P<ver>v\d{1,2})?(?:$|[\s._-])").unwrap()
+});
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ParsedMedia {
@@ -122,7 +129,10 @@ fn find_episode_loose(stem: &str) -> EpisodeMatch {
         if let Some(caps) = re.captures(stem) {
             let group = caps.name("episode").unwrap();
             // Skip the version suffix ("v2") so it doesn't leak into the title.
-            let end = caps.name("ver").map(|m| m.end()).unwrap_or_else(|| group.end());
+            let end = caps
+                .name("ver")
+                .map(|m| m.end())
+                .unwrap_or_else(|| group.end());
             return EpisodeMatch {
                 season: 1,
                 episode: group.as_str().parse().unwrap_or(1),
@@ -277,6 +287,73 @@ pub fn show_title_from_folder(name: &str) -> (String, Option<i64>) {
     (title, year)
 }
 
+/// Artist/album/year/title derived for an audio track. Used as the fallback
+/// when ffprobe tags are missing (see `parse_music_file`).
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ParsedMusic {
+    pub source_name: String,
+    pub artist: String,
+    pub album: String,
+    pub year: Option<i64>,
+    pub title: String,
+}
+
+/// Derive artist/album/year/title for an audio track from its FILENAME, falling
+/// back to the enclosing FOLDER structure. The folder convention recognised is
+/// `<Artist>/<Album>` (album is the deepest folder, artist its parent) or a lone
+/// `<Album>` folder. ffprobe tags, when present, take precedence over this
+/// parser at the call site (the match route).
+pub fn parse_music_file(
+    path: &Path,
+    folder_artist: Option<&str>,
+    folder_album: Option<&str>,
+) -> ParsedMusic {
+    let source_name = file_name(path);
+    let stem = file_stem(path);
+
+    // A leading track number ("01 - Title", "01. Title", "1 Title") is noise for
+    // the track title; strip it so the cleaned title reads naturally.
+    let title = clean_tokens(&strip_leading_track_number(&stem));
+    let title = if title.is_empty() {
+        stem.clone()
+    } else {
+        title
+    };
+
+    // The album folder may carry a trailing year, e.g. "Discovery (2001)".
+    let (album_from_folder, year_from_folder) = match folder_album {
+        Some(name) => {
+            let (title, year) = show_title_from_folder(name);
+            (Some(title), year)
+        }
+        None => (None, None),
+    };
+
+    let artist = folder_artist
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let album = album_from_folder
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| "Unknown Album".to_string());
+
+    ParsedMusic {
+        source_name,
+        artist,
+        album,
+        year: year_from_folder,
+        title,
+    }
+}
+
+/// Remove a leading track-number prefix such as "01 - ", "01. ", or "1 " from a
+/// track filename stem.
+fn strip_leading_track_number(stem: &str) -> String {
+    static TRACK_NUM_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^\s*\d{1,3}\s*[-._)]*\s+").unwrap());
+    TRACK_NUM_RE.replace(stem, "").to_string()
+}
+
 pub fn parse_film_filename(path: &Path) -> ParsedMedia {
     let source_name = file_name(path);
     let stem = file_stem(path);
@@ -330,8 +407,7 @@ mod tests {
 
     #[test]
     fn folder_episode_sxxeyy_version_suffix() {
-        let parsed =
-            parse_folder_episode(&PathBuf::from("Show.S02E07v2.mkv"), "Show", None);
+        let parsed = parse_folder_episode(&PathBuf::from("Show.S02E07v2.mkv"), "Show", None);
         assert_eq!(parsed.season, 2);
         assert_eq!(parsed.episode, 7);
     }
@@ -359,7 +435,10 @@ mod tests {
     #[test]
     fn season_from_folder_segments() {
         assert_eq!(season_from_segments(&["Black Lagoon", "Season 2"]), Some(2));
-        assert_eq!(season_from_segments(&["Black Lagoon", "Saison 03"]), Some(3));
+        assert_eq!(
+            season_from_segments(&["Black Lagoon", "Saison 03"]),
+            Some(3)
+        );
         assert_eq!(season_from_segments(&["Show", "S01"]), Some(1));
         assert_eq!(season_from_segments(&["Show", "Extras"]), None);
     }
@@ -390,6 +469,28 @@ mod tests {
         let (title, year) = show_title_from_folder("Black Lagoon (2006)");
         assert_eq!(title, "Black Lagoon");
         assert_eq!(year, Some(2006));
+    }
+
+    #[test]
+    fn parse_music_uses_folder_artist_album_and_year() {
+        let parsed = parse_music_file(
+            &PathBuf::from("01 - One More Time.flac"),
+            Some("Daft Punk"),
+            Some("Discovery (2001)"),
+        );
+        assert_eq!(parsed.artist, "Daft Punk");
+        assert_eq!(parsed.album, "Discovery");
+        assert_eq!(parsed.year, Some(2001));
+        assert_eq!(parsed.title, "One More Time");
+        assert_eq!(parsed.source_name, "01 - One More Time.flac");
+    }
+
+    #[test]
+    fn parse_music_defaults_when_no_folder() {
+        let parsed = parse_music_file(&PathBuf::from("track.mp3"), None, None);
+        assert_eq!(parsed.artist, "Unknown Artist");
+        assert_eq!(parsed.album, "Unknown Album");
+        assert_eq!(parsed.year, None);
     }
 
     #[test]

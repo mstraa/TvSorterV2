@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS imports (
     source_device INTEGER,
     source_inode INTEGER,
     output_path TEXT NOT NULL,
-    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film')),
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film', 'music')),
     provider TEXT,
     provider_show_id TEXT,
     show_title TEXT NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS imports (
 
 CREATE TABLE IF NOT EXISTS library_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film')),
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film', 'music')),
     output_path TEXT NOT NULL UNIQUE,
     size INTEGER,
     mtime REAL,
@@ -160,6 +160,7 @@ impl Database {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(SCHEMA)?;
         migrate_imports_action_check(&conn)?;
+        migrate_media_type_check(&conn)?;
         Ok(Self {
             path: path.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
@@ -179,9 +180,11 @@ impl Database {
 
     pub fn get_setting(&self, key: &str, default: &str) -> String {
         let conn = self.lock();
-        conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |row| {
-            row.get::<_, String>(0)
-        })
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
         .optional()
         .ok()
         .flatten()
@@ -311,7 +314,10 @@ impl Database {
             .unwrap_or_default()
     }
 
-    pub fn latest_imports_for_sources(&self, source_paths: &[PathBuf]) -> HashMap<String, ImportRow> {
+    pub fn latest_imports_for_sources(
+        &self,
+        source_paths: &[PathBuf],
+    ) -> HashMap<String, ImportRow> {
         if source_paths.is_empty() {
             return HashMap::new();
         }
@@ -334,7 +340,9 @@ impl Database {
             .query_map(params_from_iter(normalized.iter()), map_import_row)
             .map(|iter| iter.filter_map(Result::ok).collect::<Vec<_>>())
             .unwrap_or_default();
-        rows.into_iter().map(|row| (row.source_path.clone(), row)).collect()
+        rows.into_iter()
+            .map(|row| (row.source_path.clone(), row))
+            .collect()
     }
 
     /// Latest import row for every source whose path lies under `prefix` (a
@@ -342,7 +350,9 @@ impl Database {
     /// files were moved out of the input tree, where they no longer exist to be
     /// listed and matched by `latest_imports_for_sources`.
     pub fn latest_imports_under_prefix(&self, prefix: &Path) -> Vec<ImportRow> {
-        let prefix = canonical_or_normalized(prefix).to_string_lossy().to_string();
+        let prefix = canonical_or_normalized(prefix)
+            .to_string_lossy()
+            .to_string();
         let like = format!("{}/%", escape_like(&prefix));
         let conn = self.lock();
         let mut stmt = match conn.prepare(
@@ -390,7 +400,9 @@ impl Database {
             })
             .map(|iter| iter.filter_map(Result::ok).collect::<Vec<_>>())
             .unwrap_or_default();
-        rows.into_iter().map(|row| (row.source_path.clone(), row)).collect()
+        rows.into_iter()
+            .map(|row| (row.source_path.clone(), row))
+            .collect()
     }
 
     pub fn set_source_status_overrides(&self, source_paths: &[PathBuf], status: Option<&str>) {
@@ -560,7 +572,7 @@ CREATE TABLE imports (
     source_device INTEGER,
     source_inode INTEGER,
     output_path TEXT NOT NULL,
-    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film')),
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film', 'music')),
     provider TEXT,
     provider_show_id TEXT,
     show_title TEXT NOT NULL,
@@ -577,6 +589,84 @@ CREATE TABLE imports (
 );
 INSERT INTO imports SELECT * FROM imports_legacy;
 DROP TABLE imports_legacy;
+COMMIT;
+PRAGMA foreign_keys = ON;
+"#,
+    )?;
+    Ok(())
+}
+
+/// Older databases created `imports` and `library_files` with a `media_type`
+/// CHECK constraint that only allowed ('tv', 'anime', 'film'). Rebuild both
+/// tables so the 'music' media type is accepted. No-op on fresh databases or
+/// ones already migrated. Mirrors the action-check migration's safety: a single
+/// transaction with FK enforcement disabled during the swap (ids are preserved,
+/// so library_files.import_id stays valid).
+fn migrate_media_type_check(conn: &Connection) -> DbResult<()> {
+    let needs = |name: &str| -> DbResult<bool> {
+        let sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(match sql {
+            Some(definition) => !definition.contains("'music'"),
+            None => false,
+        })
+    };
+    if !needs("imports")? && !needs("library_files")? {
+        return Ok(());
+    }
+
+    // SQLite can't ALTER a CHECK constraint, so recreate the tables and copy
+    // rows. ids are preserved by the copy, so disable FK enforcement during the
+    // swap to avoid spurious errors on the library_files -> imports reference.
+    conn.execute_batch(
+        r#"
+PRAGMA foreign_keys = OFF;
+BEGIN;
+ALTER TABLE imports RENAME TO imports_legacy;
+CREATE TABLE imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path TEXT NOT NULL,
+    source_size INTEGER,
+    source_mtime REAL,
+    source_device INTEGER,
+    source_inode INTEGER,
+    output_path TEXT NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film', 'music')),
+    provider TEXT,
+    provider_show_id TEXT,
+    show_title TEXT NOT NULL,
+    show_year INTEGER,
+    season_number INTEGER NOT NULL,
+    episode_number INTEGER NOT NULL,
+    episode_title TEXT NOT NULL,
+    quality TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('hardlink', 'copy', 'move', 'test')),
+    conflict_policy TEXT NOT NULL CHECK (conflict_policy IN ('skip', 'replace', 'index', 'fail')),
+    result TEXT NOT NULL,
+    error TEXT,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO imports SELECT * FROM imports_legacy;
+DROP TABLE imports_legacy;
+ALTER TABLE library_files RENAME TO library_files_legacy;
+CREATE TABLE library_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film', 'music')),
+    output_path TEXT NOT NULL UNIQUE,
+    size INTEGER,
+    mtime REAL,
+    present INTEGER NOT NULL DEFAULT 1,
+    import_id INTEGER REFERENCES imports(id) ON DELETE SET NULL,
+    discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO library_files SELECT * FROM library_files_legacy;
+DROP TABLE library_files_legacy;
 COMMIT;
 PRAGMA foreign_keys = ON;
 "#,
@@ -685,6 +775,109 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].source_path, child.to_string_lossy());
         assert_eq!(rows[0].result, "imported");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fresh_db_accepts_music_media_type() {
+        let dir = std::env::temp_dir().join(format!("tvsorter-db-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Database::open(&dir.join("test.db")).unwrap();
+        let mut rec = record("/in/track.mp3");
+        rec.media_type = "music".to_string();
+        rec.output_path = "/out/Artist/Album (2001)/track.mp3".to_string();
+        let id = db.insert_import(&rec);
+        assert!(id > 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrates_legacy_media_type_check_to_allow_music() {
+        let dir = std::env::temp_dir().join(format!("tvsorter-db-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("legacy.db");
+
+        // Build a legacy database whose CHECK constraints predate 'music'.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+PRAGMA foreign_keys = ON;
+CREATE TABLE imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path TEXT NOT NULL,
+    source_size INTEGER,
+    source_mtime REAL,
+    source_device INTEGER,
+    source_inode INTEGER,
+    output_path TEXT NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film')),
+    provider TEXT,
+    provider_show_id TEXT,
+    show_title TEXT NOT NULL,
+    show_year INTEGER,
+    season_number INTEGER NOT NULL,
+    episode_number INTEGER NOT NULL,
+    episode_title TEXT NOT NULL,
+    quality TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('hardlink', 'copy', 'move', 'test')),
+    conflict_policy TEXT NOT NULL CHECK (conflict_policy IN ('skip', 'replace', 'index', 'fail')),
+    result TEXT NOT NULL,
+    error TEXT,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE library_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film')),
+    output_path TEXT NOT NULL UNIQUE,
+    size INTEGER,
+    mtime REAL,
+    present INTEGER NOT NULL DEFAULT 1,
+    import_id INTEGER REFERENCES imports(id) ON DELETE SET NULL,
+    discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO imports (source_path, output_path, media_type, show_title,
+    season_number, episode_number, episode_title, quality, action,
+    conflict_policy, result)
+VALUES ('/in/a.mkv', '/out/a.mkv', 'tv', 'Show', 1, 1, 'E', '1080p',
+    'move', 'skip', 'imported');
+INSERT INTO library_files (media_type, output_path, import_id)
+VALUES ('tv', '/out/a.mkv', 1);
+"#,
+            )
+            .unwrap();
+        }
+
+        // Opening runs the migration; existing rows and the FK link survive.
+        let db = Database::open(&db_path).unwrap();
+        let mut rec = record("/in/track.mp3");
+        rec.media_type = "music".to_string();
+        rec.output_path = "/out/Artist/Album (2001)/track.mp3".to_string();
+        let id = db.insert_import(&rec);
+        assert!(id > 0);
+
+        let conn = db.lock();
+        let imports_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(imports_count, 2);
+        // One legacy row survived the migration; inserting the music import
+        // upserts a second (its output_path differs).
+        let lib_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM library_files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(lib_count, 2);
+        // The migrated library_files row still references the migrated import.
+        let music_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM library_files WHERE media_type = 'music'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(music_rows, 1);
+        drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

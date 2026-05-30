@@ -210,6 +210,7 @@ export default function BrowsePage() {
                 { value: "tv", label: "TV" },
                 { value: "anime", label: "Anime" },
                 { value: "film", label: "Film" },
+                { value: "music", label: "Music" },
               ]}
             />
           </label>

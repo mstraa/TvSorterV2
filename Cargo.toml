@@ -1,6 +1,6 @@
 [package]
 name = "tvsorter"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "LAN-only TV, anime, and film hardlink/copy sorter (Rust backend)"
 license = "MIT"
@@ -34,6 +34,7 @@ filetime = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+xattr = "1"
 
 [profile.release]
 opt-level = 2

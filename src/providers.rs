@@ -81,12 +81,18 @@ impl MetadataProviders {
         }
     }
 
-    pub async fn search(&self, media_type: &str, query: &str) -> Result<Vec<ShowCandidate>, ProviderError> {
+    pub async fn search(
+        &self,
+        media_type: &str,
+        query: &str,
+    ) -> Result<Vec<ShowCandidate>, ProviderError> {
         match media_type {
             "tv" => self.search_tvmaze(query).await,
             "anime" => self.search_jikan(query).await,
             "film" => self.search_films(query).await,
-            other => Err(ProviderError::Other(format!("Unsupported media type: {other}"))),
+            other => Err(ProviderError::Other(format!(
+                "Unsupported media type: {other}"
+            ))),
         }
     }
 
@@ -99,7 +105,9 @@ impl MetadataProviders {
             "tv" => self.tvmaze_episodes(provider_show_id).await,
             "anime" => self.jikan_episodes(provider_show_id).await,
             "film" => Ok(Vec::new()),
-            other => Err(ProviderError::Other(format!("Unsupported media type: {other}"))),
+            other => Err(ProviderError::Other(format!(
+                "Unsupported media type: {other}"
+            ))),
         }
     }
 
@@ -296,7 +304,10 @@ impl MetadataProviders {
         }
     }
 
-    async fn search_imdb_suggestions(&self, query: &str) -> Result<Vec<ShowCandidate>, ProviderError> {
+    async fn search_imdb_suggestions(
+        &self,
+        query: &str,
+    ) -> Result<Vec<ShowCandidate>, ProviderError> {
         let key = format!("imdb:suggest:film:{}", query.to_lowercase());
         let first_char = first_query_letter(query);
         let url = format!(
@@ -342,7 +353,10 @@ impl MetadataProviders {
         Ok(candidates)
     }
 
-    async fn search_wikidata_films(&self, query: &str) -> Result<Vec<ShowCandidate>, ProviderError> {
+    async fn search_wikidata_films(
+        &self,
+        query: &str,
+    ) -> Result<Vec<ShowCandidate>, ProviderError> {
         let key = format!("wikidata:film:search:{}", query.to_lowercase());
         let cached = if let Some(cached) = self.db.get_cache(&key) {
             cached
@@ -401,7 +415,8 @@ impl MetadataProviders {
                     provider: "wikidata".to_string(),
                     provider_id: entity_id.to_string(),
                     title: label,
-                    year: wikidata_release_year(entity).or_else(|| year_from_description(&description)),
+                    year: wikidata_release_year(entity)
+                        .or_else(|| year_from_description(&description)),
                     summary: truncate(&description, 240),
                 });
                 if candidates.len() >= 10 {

@@ -45,6 +45,7 @@ export const api = {
     tv_output_root: string;
     anime_output_root: string;
     film_output_root: string;
+    music_output_root: string;
     copy_rate_limit_mbps: string;
   }) =>
     request<{ status: string }>("/api/settings", {

@@ -9,7 +9,6 @@ import type {
   ImportBatch,
   MatchResponse,
   MediaType,
-  PreviewResult,
   ShowCandidate,
 } from "../types";
 
@@ -27,6 +26,7 @@ interface EpisodeUi {
   episode_title: string;
   quality: string;
   expanded: boolean;
+  included: boolean;
 }
 
 interface GroupUi {
@@ -34,6 +34,7 @@ interface GroupUi {
   group_name: string;
   show_title: string;
   show_year: string;
+  album: string;
   provider: string;
   provider_show_id: string;
   candidates: ShowCandidate[];
@@ -77,7 +78,6 @@ export default function MatchPage() {
   const [groups, setGroups] = useState<GroupUi[]>([]);
   const [action, setAction] = useState("copy");
   const [conflict, setConflict] = useState("skip");
-  const [preview, setPreview] = useState<PreviewResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loaded = useRef(false);
 
@@ -95,6 +95,7 @@ export default function MatchPage() {
             group_name: group.group_name,
             show_title: group.show_title,
             show_year: group.show_year != null ? String(group.show_year) : "",
+            album: group.episodes[0]?.episode_title ?? "",
             provider: group.provider,
             provider_show_id: group.provider_show_id,
             candidates: group.candidates,
@@ -107,6 +108,7 @@ export default function MatchPage() {
               episode_title: ep.episode_title,
               quality: ep.quality,
               expanded: false,
+              included: true,
             })),
             query: group.show_title,
             searchResults: [],
@@ -134,7 +136,12 @@ export default function MatchPage() {
   const mediaType = response?.media_type ?? state.mediaType;
   const isFilm = mediaType === "film";
   const isAnime = mediaType === "anime";
+  const isMusic = mediaType === "music";
   const episodeCount = groups.reduce((sum, group) => sum + group.episodes.length, 0);
+  const includedCount = groups.reduce(
+    (sum, group) => sum + group.episodes.filter((ep) => ep.included).length,
+    0,
+  );
 
   function updateGroup(gi: number, partial: Partial<GroupUi>) {
     setGroups((prev) => prev.map((group, i) => (i === gi ? { ...group, ...partial } : group)));
@@ -163,6 +170,16 @@ export default function MatchPage() {
                 j === ei ? { ...ep, expanded: !ep.expanded } : ep,
               ),
             }
+          : group,
+      ),
+    );
+  }
+
+  function setGroupIncluded(gi: number, included: boolean) {
+    setGroups((prev) =>
+      prev.map((group, i) =>
+        i === gi
+          ? { ...group, episodes: group.episodes.map((ep) => ({ ...ep, included })) }
           : group,
       ),
     );
@@ -268,31 +285,21 @@ export default function MatchPage() {
       action,
       conflict_policy: conflict,
       items: groups.flatMap((group) =>
-        group.episodes.map((ep) => ({
-          source_path: ep.source_path,
-          show_title: group.show_title,
-          show_year: group.show_year.trim() ? Number(group.show_year) : null,
-          season_number: isFilm ? 0 : ep.season_number,
-          episode_number: isFilm ? 0 : ep.episode_number,
-          episode_title: isFilm ? "Film" : ep.episode_title,
-          quality: ep.quality,
-          provider: group.provider || null,
-          provider_show_id: group.provider_show_id || null,
-        })),
+        group.episodes
+          .filter((ep) => ep.included)
+          .map((ep) => ({
+            source_path: ep.source_path,
+            show_title: group.show_title,
+            show_year: group.show_year.trim() ? Number(group.show_year) : null,
+            season_number: isFilm || isMusic ? 0 : ep.season_number,
+            episode_number: isFilm || isMusic ? 0 : ep.episode_number,
+            episode_title: isMusic ? group.album : isFilm ? "Film" : ep.episode_title,
+            quality: ep.quality,
+            provider: group.provider || null,
+            provider_show_id: group.provider_show_id || null,
+          })),
       ),
     };
-  }
-
-  async function runPreview() {
-    progress.startDelayed("Building preview...");
-    try {
-      const { results } = await api.postPreview(buildBatch());
-      setPreview(results);
-    } catch (e) {
-      alert(e instanceof ApiError ? e.message : "Preview failed.");
-    } finally {
-      progress.hide();
-    }
   }
 
   // Import runs in the background: start the job and hand off to the Imports
@@ -357,45 +364,26 @@ export default function MatchPage() {
             </label>
             <span className="muted match-count">
               {isFilm
-                ? `${episodeCount} film${episodeCount === 1 ? "" : "s"}`
-                : `${groups.length} folder${groups.length === 1 ? "" : "s"} · ${episodeCount} episode${
+                ? `${includedCount}/${episodeCount} film${episodeCount === 1 ? "" : "s"}`
+                : isMusic
+                ? `${groups.length} album${groups.length === 1 ? "" : "s"} · ${includedCount}/${episodeCount} track${
+                    episodeCount === 1 ? "" : "s"
+                  }`
+                : `${groups.length} folder${groups.length === 1 ? "" : "s"} · ${includedCount}/${episodeCount} episode${
                     episodeCount === 1 ? "" : "s"
                   }`}
             </span>
-            <button type="button" onClick={runPreview}>
-              Preview
-            </button>
-            <button type="button" onClick={runImport} disabled={!response?.output_root}>
+            <button
+              type="button"
+              onClick={runImport}
+              disabled={!response?.output_root || includedCount === 0}
+            >
               Import
             </button>
+            {includedCount === 0 && episodeCount > 0 && (
+              <span className="muted">Nothing selected to import.</span>
+            )}
           </div>
-
-          {preview && (
-            <div className="panel inner-panel">
-              <h2>Preview</h2>
-              <table className="result-table">
-                <thead>
-                  <tr>
-                    <th>Source</th>
-                    <th>Destination</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.map((result, i) => (
-                    <tr key={i} className={`state-row state-${result.result}`}>
-                      <td className="path-cell">{result.source_path}</td>
-                      <td className="path-cell">{result.final_path}</td>
-                      <td>
-                        <span className={`state-badge state-${result.result}`}>{result.result}</span>
-                        {result.error ? ` ${result.error}` : ""}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
 
           {groups.map((group, gi) =>
             isFilm ? (
@@ -410,6 +398,16 @@ export default function MatchPage() {
                 onSearch={() => searchGroup(gi)}
                 onApply={() => applyGroupMatch(gi)}
               />
+            ) : isMusic ? (
+              <MusicCard
+                key={group.group_key}
+                group={group}
+                gi={gi}
+                onUpdateGroup={updateGroup}
+                onToggleEpisode={toggleEpisode}
+                onSetEpisodeIncluded={(ei, inc) => updateEpisode(gi, ei, { included: inc })}
+                onSetGroupIncluded={(inc) => setGroupIncluded(gi, inc)}
+              />
             ) : (
               <GroupCard
                 key={group.group_key}
@@ -419,6 +417,7 @@ export default function MatchPage() {
                 onUpdateGroup={updateGroup}
                 onUpdateEpisode={updateEpisode}
                 onToggleEpisode={toggleEpisode}
+                onSetGroupIncluded={(inc) => setGroupIncluded(gi, inc)}
                 onSearch={() => searchGroup(gi)}
                 onApply={() => applyGroupMatch(gi)}
                 onLoadEpisodes={() => loadGroupEpisodes(gi)}
@@ -438,9 +437,19 @@ interface GroupCardProps {
   onUpdateGroup: (gi: number, partial: Partial<GroupUi>) => void;
   onUpdateEpisode: (gi: number, ei: number, partial: Partial<EpisodeUi>) => void;
   onToggleEpisode: (gi: number, ei: number) => void;
+  onSetGroupIncluded: (included: boolean) => void;
   onSearch: () => void;
   onApply: () => void;
   onLoadEpisodes: () => void;
+}
+
+function groupIncludeState(group: GroupUi): { allIncluded: boolean; indeterminate: boolean } {
+  const total = group.episodes.length;
+  const included = group.episodes.filter((ep) => ep.included).length;
+  return {
+    allIncluded: total > 0 && included === total,
+    indeterminate: included > 0 && included < total,
+  };
 }
 
 function GroupCard({
@@ -450,14 +459,26 @@ function GroupCard({
   onUpdateGroup,
   onUpdateEpisode,
   onToggleEpisode,
+  onSetGroupIncluded,
   onSearch,
   onApply,
   onLoadEpisodes,
 }: GroupCardProps) {
+  const { allIncluded, indeterminate } = groupIncludeState(group);
   return (
     <div className="match-group">
       <div className="group-header">
         <div className="group-show">
+          <input
+            type="checkbox"
+            className="include-checkbox group-include"
+            checked={allIncluded}
+            ref={(el) => {
+              if (el) el.indeterminate = indeterminate;
+            }}
+            onChange={(e) => onSetGroupIncluded(e.target.checked)}
+            title="Include/exclude entire folder"
+          />
           <input
             className="group-title-input"
             value={group.show_title}
@@ -521,6 +542,7 @@ function GroupCard({
       <table className="episode-table">
         <thead>
           <tr>
+            <th className="col-include" aria-label="Include" />
             <th className="col-code">Ep</th>
             <th className="col-title">Title</th>
             <th className="col-quality">Quality</th>
@@ -530,7 +552,20 @@ function GroupCard({
         <tbody>
           {group.episodes.map((ep, ei) => (
             <Fragment key={ep.source_path}>
-              <tr className="episode-row" onClick={() => onToggleEpisode(gi, ei)}>
+              <tr
+                className={`episode-row${ep.included ? "" : " excluded-row"}`}
+                onClick={() => onToggleEpisode(gi, ei)}
+              >
+                <td className="col-include">
+                  <input
+                    type="checkbox"
+                    className="include-checkbox"
+                    checked={ep.included}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => onUpdateEpisode(gi, ei, { included: e.target.checked })}
+                    title="Include/exclude this episode"
+                  />
+                </td>
                 <td className="col-code">
                   S{pad2(ep.season_number)}E{pad2(ep.episode_number)}
                 </td>
@@ -540,7 +575,7 @@ function GroupCard({
               </tr>
               {ep.expanded && (
                 <tr className="episode-editor-row">
-                  <td colSpan={4}>
+                  <td colSpan={5}>
                     <div className="episode-editor">
                       <div className="grid">
                         <label>
@@ -623,6 +658,102 @@ function GroupCard({
   );
 }
 
+interface MusicCardProps {
+  group: GroupUi;
+  gi: number;
+  onUpdateGroup: (gi: number, partial: Partial<GroupUi>) => void;
+  onToggleEpisode: (gi: number, ei: number) => void;
+  onSetEpisodeIncluded: (ei: number, included: boolean) => void;
+  onSetGroupIncluded: (included: boolean) => void;
+}
+
+function MusicCard({
+  group,
+  gi,
+  onUpdateGroup,
+  onToggleEpisode,
+  onSetEpisodeIncluded,
+  onSetGroupIncluded,
+}: MusicCardProps) {
+  const { allIncluded, indeterminate } = groupIncludeState(group);
+  return (
+    <div className="match-group">
+      <div className="group-header">
+        <div className="group-show">
+          <input
+            type="checkbox"
+            className="include-checkbox group-include"
+            checked={allIncluded}
+            ref={(el) => {
+              if (el) el.indeterminate = indeterminate;
+            }}
+            onChange={(e) => onSetGroupIncluded(e.target.checked)}
+            title="Include/exclude entire album"
+          />
+          <input
+            className="group-title-input"
+            value={group.show_title}
+            onChange={(e) => onUpdateGroup(gi, { show_title: e.target.value })}
+            placeholder="Artist"
+          />
+          <input
+            className="group-title-input"
+            value={group.album}
+            onChange={(e) => onUpdateGroup(gi, { album: e.target.value })}
+            placeholder="Album"
+          />
+          <input
+            className="group-year-input"
+            value={group.show_year}
+            onChange={(e) => onUpdateGroup(gi, { show_year: e.target.value })}
+            placeholder="Year"
+          />
+          <span className="muted group-count">
+            {group.episodes.length} track{group.episodes.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="group-folder muted">📁 {group.group_name}</div>
+      </div>
+
+      {group.metadata_error && (
+        <p className="error group-error">Metadata lookup failed: {group.metadata_error}</p>
+      )}
+
+      <table className="episode-table">
+        <thead>
+          <tr>
+            <th className="col-include" aria-label="Include" />
+            <th className="col-title">Track</th>
+            <th className="col-quality">Quality</th>
+          </tr>
+        </thead>
+        <tbody>
+          {group.episodes.map((ep, ei) => (
+            <tr
+              key={ep.source_path}
+              className={`episode-row${ep.included ? "" : " excluded-row"}`}
+              onClick={() => onToggleEpisode(gi, ei)}
+            >
+              <td className="col-include">
+                <input
+                  type="checkbox"
+                  className="include-checkbox"
+                  checked={ep.included}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => onSetEpisodeIncluded(ei, e.target.checked)}
+                  title="Include/exclude this track"
+                />
+              </td>
+              <td className="col-title">{ep.source_name}</td>
+              <td className="col-quality">{ep.quality}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 interface FilmRowProps {
   group: GroupUi;
   gi: number;
@@ -645,9 +776,18 @@ function FilmRow({
 }: FilmRowProps) {
   const ep = group.episodes[0];
   const expanded = ep?.expanded ?? false;
+  const included = ep?.included ?? true;
   return (
     <div className="match-group film-group">
-      <div className="episode-row film-row" onClick={onToggle}>
+      <div className={`episode-row film-row${included ? "" : " excluded-row"}`} onClick={onToggle}>
+        <input
+          type="checkbox"
+          className="include-checkbox"
+          checked={included}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => onUpdateEpisode(gi, 0, { included: e.target.checked })}
+          title="Include/exclude this film"
+        />
         <span className="film-title">
           {group.show_title}
           {group.show_year ? ` (${group.show_year})` : ""}

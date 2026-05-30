@@ -6,8 +6,10 @@ use crate::db::Database;
 use crate::jobs::JobManager;
 use crate::providers::MetadataProviders;
 
-pub const MEDIA_TYPES: &[&str] = &["tv", "anime", "film"];
-pub const SOURCE_STATUSES: &[&str] = &["none", "imported", "failed", "skipped", "preview", "conflict"];
+pub const MEDIA_TYPES: &[&str] = &["tv", "anime", "film", "music"];
+pub const SOURCE_STATUSES: &[&str] = &[
+    "none", "imported", "failed", "skipped", "preview", "conflict",
+];
 pub const PICKER_ROOTS: &[&str] = &["/mnt", "/media", "/srv", "/opt", "/var/lib", "/"];
 /// Allowed import actions. The `imports.action` CHECK constraint in `db.rs`
 /// (schema + migration) must mirror this list.
@@ -39,7 +41,9 @@ impl AppState {
     }
 
     pub fn output_root_for(&self, media_type: &str) -> Option<PathBuf> {
-        let value = self.db.get_setting(&format!("{media_type}_output_root"), "");
+        let value = self
+            .db
+            .get_setting(&format!("{media_type}_output_root"), "");
         if value.is_empty() {
             None
         } else {

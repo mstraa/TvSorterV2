@@ -301,7 +301,7 @@ export default function BrowsePage() {
                   {entry.is_dir
                     ? "folder"
                     : entry.is_hardlink
-                    ? <span className="state-badge state-hardlink">hardlink</span>
+                    ? "hardlink"
                     : entry.is_video
                     ? "video"
                     : "file"}

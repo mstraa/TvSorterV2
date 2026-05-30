@@ -429,30 +429,48 @@ fn format_os_error(err: &std::io::Error, destination: &Path) -> String {
     }
 }
 
-/// Build the database record for an import result, including source stat data.
-pub fn result_to_record(result: &ImportResult) -> ImportRecord {
-    let request = &result.request;
-    let (source_size, source_mtime, source_device, source_inode) =
-        match fs::metadata(&request.source_path) {
-            Ok(meta) => {
-                let size = Some(meta.len() as i64);
-                let mtime = meta
+/// Source file stat data captured *before* the import runs. A `move` deletes
+/// the source, so statting it afterwards (in `result_to_record`) would lose
+/// this data; the caller captures it up front via `stat_source` instead.
+#[derive(Clone, Copy, Default)]
+pub struct SourceStat {
+    pub size: Option<i64>,
+    pub mtime: Option<f64>,
+    pub device: Option<i64>,
+    pub inode: Option<i64>,
+}
+
+/// Read size/mtime/device/inode from the source path. Call this before
+/// executing the import so the data survives a `move`.
+pub fn stat_source(path: &Path) -> SourceStat {
+    match fs::metadata(path) {
+        Ok(meta) => {
+            let (device, inode) = stat_dev_inode(&meta);
+            SourceStat {
+                size: Some(meta.len() as i64),
+                mtime: meta
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs_f64());
-                let (device, inode) = stat_dev_inode(&meta);
-                (size, mtime, device, inode)
+                    .map(|d| d.as_secs_f64()),
+                device,
+                inode,
             }
-            Err(_) => (None, None, None, None),
-        };
+        }
+        Err(_) => SourceStat::default(),
+    }
+}
 
+/// Build the database record for an import result. `source` holds the source
+/// stat captured before the import ran (see `stat_source`).
+pub fn result_to_record(result: &ImportResult, source: SourceStat) -> ImportRecord {
+    let request = &result.request;
     ImportRecord {
         source_path: request.source_path.to_string_lossy().to_string(),
-        source_size,
-        source_mtime,
-        source_device,
-        source_inode,
+        source_size: source.size,
+        source_mtime: source.mtime,
+        source_device: source.device,
+        source_inode: source.inode,
         output_path: result.final_path.clone(),
         media_type: request.media_type.clone(),
         provider: request.provider.clone(),
@@ -569,6 +587,35 @@ mod tests {
         File::create(&source).unwrap().write_all(b"x").unwrap();
         let result = execute_import(request(source, dir.join("out"), "test", "skip"), None, None, None);
         assert_eq!(result.result, "preview");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn move_removes_source() {
+        let dir = temp_dir();
+        let source = dir.join("src.mkv");
+        File::create(&source).unwrap().write_all(b"hello world").unwrap();
+        let out = dir.join("out");
+        let result = execute_import(request(source.clone(), out, "move", "skip"), None, None, None);
+        assert_eq!(result.result, "imported");
+        assert!(PathBuf::from(&result.final_path).exists());
+        assert!(!source.exists(), "source should be gone after a move");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn move_record_keeps_source_stat_captured_before_run() {
+        let dir = temp_dir();
+        let source = dir.join("src.mkv");
+        File::create(&source).unwrap().write_all(b"hello world").unwrap();
+        // Stat must be captured before the move deletes the source; statting
+        // after would yield all-None.
+        let stat = stat_source(&source);
+        let result = execute_import(request(source.clone(), dir.join("out"), "move", "skip"), None, None, None);
+        assert!(!source.exists());
+        let record = result_to_record(&result, stat);
+        assert_eq!(record.source_size, Some(11));
+        assert!(record.source_mtime.is_some());
         fs::remove_dir_all(&dir).ok();
     }
 }

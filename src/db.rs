@@ -332,6 +332,28 @@ impl Database {
         rows.into_iter().map(|row| (row.source_path.clone(), row)).collect()
     }
 
+    /// Latest import row for every source whose path lies under `prefix` (a
+    /// directory). Lets a folder keep showing an aggregate status after its
+    /// files were moved out of the input tree, where they no longer exist to be
+    /// listed and matched by `latest_imports_for_sources`.
+    pub fn latest_imports_under_prefix(&self, prefix: &Path) -> Vec<ImportRow> {
+        let prefix = canonical_or_normalized(prefix).to_string_lossy().to_string();
+        let like = format!("{}/%", escape_like(&prefix));
+        let conn = self.lock();
+        let mut stmt = match conn.prepare(
+            "SELECT * FROM imports WHERE id IN (
+                SELECT MAX(id) FROM imports
+                WHERE source_path LIKE ?1 ESCAPE '\\' GROUP BY source_path
+            )",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![like], map_import_row)
+            .map(|iter| iter.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+
     // ---- source status overrides ----
 
     pub fn source_status_overrides(
@@ -546,6 +568,15 @@ PRAGMA foreign_keys = ON;
     Ok(())
 }
 
+/// Escape the LIKE wildcards (`%`, `_`) and the escape char itself so a path
+/// used as a prefix matches literally. Paired with `ESCAPE '\'` in the query.
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn map_import_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImportRow> {
     Ok(ImportRow {
         id: row.get("id")?,
@@ -600,4 +631,51 @@ fn upsert_library_file(conn: &Connection, record: &ImportRecord, import_id: Opti
             import_id
         ],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(source_path: &str) -> ImportRecord {
+        ImportRecord {
+            source_path: source_path.to_string(),
+            source_size: Some(1),
+            source_mtime: None,
+            source_device: None,
+            source_inode: None,
+            output_path: "/out/x.mkv".to_string(),
+            media_type: "tv".to_string(),
+            provider: None,
+            provider_show_id: None,
+            show_title: "Show".to_string(),
+            show_year: None,
+            season_number: 1,
+            episode_number: 1,
+            episode_title: "E".to_string(),
+            quality: "1080p".to_string(),
+            action: "move".to_string(),
+            conflict_policy: "skip".to_string(),
+            result: "imported".to_string(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn latest_imports_under_prefix_matches_only_that_folder() {
+        let dir = std::env::temp_dir().join(format!("tvsorter-db-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Database::open(&dir.join("test.db")).unwrap();
+        let base = canonical_or_normalized(&dir);
+        let child = base.join("Show").join("ep.mkv");
+        let other = base.join("Other").join("ep.mkv");
+        db.insert_import(&record(&child.to_string_lossy()));
+        db.insert_import(&record(&other.to_string_lossy()));
+
+        let rows = db.latest_imports_under_prefix(&base.join("Show"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_path, child.to_string_lossy());
+        assert_eq!(rows[0].result, "imported");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

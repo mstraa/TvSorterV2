@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::db::Database;
 use crate::importer::{
-    build_destination, execute_import, import_request_units, result_to_record, ImportRequest,
-    ImportResult,
+    build_destination, execute_import, import_request_units, result_to_record, stat_source,
+    ImportRequest, ImportResult,
 };
 
 /// One file within an import job. `status` is one of:
@@ -377,8 +377,11 @@ fn run_job(state: Arc<Mutex<JobState>>, db: Database, copy_rate_limit_mbps: Opti
             s.cancel_all || s.cancel_items.contains(&item_index)
         };
 
+        // Capture source stat before the import runs: a `move` deletes the
+        // source, so it must be read up front to be recorded.
+        let source_stat = stat_source(&request.source_path);
         let result = execute_import(request, Some(&progress), copy_rate_limit_mbps, Some(&cancel));
-        db.insert_import(&result_to_record(&result));
+        db.insert_import(&result_to_record(&result, source_stat));
 
         {
             let mut s = lock(&state);

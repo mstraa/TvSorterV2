@@ -167,7 +167,21 @@ async fn browse(
                 let mut all_sources: Vec<PathBuf> = Vec::new();
                 for entry in &listed {
                     let sources = if entry.is_dir {
-                        expand_source_files(&root_path, &[entry.relative_path.clone()]).unwrap_or_default()
+                        let mut present = expand_source_files(&root_path, &[entry.relative_path.clone()])
+                            .unwrap_or_default();
+                        // Files imported from this folder and then moved out of
+                        // the input tree no longer exist to be listed, but the
+                        // folder should still reflect that they were imported.
+                        let present_set: std::collections::HashSet<&PathBuf> = present.iter().collect();
+                        let moved: Vec<PathBuf> = state
+                            .db
+                            .latest_imports_under_prefix(&entry.absolute_path)
+                            .into_iter()
+                            .map(|row| PathBuf::from(row.source_path))
+                            .filter(|p| !present_set.contains(p))
+                            .collect();
+                        present.extend(moved);
+                        present
                     } else {
                         vec![canonical_or_normalized(&entry.absolute_path)]
                     };

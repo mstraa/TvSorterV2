@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS source_status_overrides (
     status TEXT NOT NULL CHECK (status IN ('none', 'imported', 'failed', 'skipped', 'preview', 'conflict')),
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Browse looks imports up by source_path (exact-match IN lists and the
+-- per-source-latest GROUP BY); index it so those scale with the result set
+-- rather than the full table.
+CREATE INDEX IF NOT EXISTS idx_imports_source_path ON imports(source_path);
 "#;
 
 #[derive(Clone, Debug, Serialize)]

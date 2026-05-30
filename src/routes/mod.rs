@@ -12,6 +12,7 @@ use crate::db::ImportRow;
 use crate::error::{AppError, AppResult};
 use crate::filesystem::{
     canonical_or_normalized, expand_grouped, expand_source_files, is_relative_to, list_directory,
+    resolve_under_root,
 };
 use crate::formatting::human_file_size;
 use crate::importer::{preview_import, ImportRequest};
@@ -165,6 +166,13 @@ async fn browse(
         let root_path = PathBuf::from(&root.path);
         match list_directory(&root_path, &query.path) {
             Ok(listed) => {
+                // Files imported from a folder and then moved out of the input
+                // tree no longer exist to be listed, but the folder should still
+                // reflect that they were imported. Fetch every such record under
+                // the *current* directory in one query, then bucket them by the
+                // child folder they belong to (one scan instead of one per child).
+                let moved_by_child = bucket_moved_imports(&state, &root_path, &query.path, &listed);
+
                 // Map each entry to the set of source files it covers.
                 let mut entry_sources: HashMap<String, Vec<PathBuf>> = HashMap::new();
                 let mut all_sources: Vec<PathBuf> = Vec::new();
@@ -175,17 +183,14 @@ async fn browse(
                             std::slice::from_ref(&entry.relative_path),
                         )
                         .unwrap_or_default();
-                        // Files imported from this folder and then moved out of
-                        // the input tree no longer exist to be listed, but the
-                        // folder should still reflect that they were imported.
                         let present_set: std::collections::HashSet<&PathBuf> = present.iter().collect();
-                        let moved: Vec<PathBuf> = state
-                            .db
-                            .latest_imports_under_prefix(&entry.absolute_path)
-                            .into_iter()
-                            .map(|row| PathBuf::from(row.source_path))
-                            .filter(|p| !present_set.contains(p))
-                            .collect();
+                        let moved: Vec<PathBuf> = moved_by_child
+                            .get(&entry.relative_path)
+                            .map(|paths| {
+                                paths.iter().filter(|p| !present_set.contains(p)).cloned().collect()
+                            })
+                            .unwrap_or_default();
+                        drop(present_set);
                         present.extend(moved);
                         present
                     } else {
@@ -314,6 +319,38 @@ fn compute_browse_status(
         latest_import_result,
         source_count: states.len(),
     }
+}
+
+/// Group moved-away import source paths by the listed child folder they belong
+/// to. One prefix query over the current directory replaces one query per
+/// child. Files moved directly out of the current directory (not from a child
+/// folder) are intentionally dropped: they are gone and not listed.
+fn bucket_moved_imports(
+    state: &AppState,
+    root_path: &Path,
+    rel_path: &str,
+    listed: &[crate::filesystem::BrowserEntry],
+) -> HashMap<String, Vec<PathBuf>> {
+    let mut buckets: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let current_dir = match resolve_under_root(root_path, rel_path) {
+        Ok(dir) => dir,
+        Err(_) => return buckets,
+    };
+    let dir_children: Vec<(String, PathBuf)> = listed
+        .iter()
+        .filter(|e| e.is_dir)
+        .map(|e| (e.relative_path.clone(), canonical_or_normalized(&e.absolute_path)))
+        .collect();
+    if dir_children.is_empty() {
+        return buckets;
+    }
+    for row in state.db.latest_imports_under_prefix(&current_dir) {
+        let path = PathBuf::from(row.source_path);
+        if let Some((rel, _)) = dir_children.iter().find(|(_, prefix)| path.starts_with(prefix)) {
+            buckets.entry(rel.clone()).or_default().push(path);
+        }
+    }
+    buckets
 }
 
 // ---------------------------------------------------------------------------

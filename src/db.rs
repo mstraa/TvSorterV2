@@ -443,15 +443,9 @@ impl Database {
     }
 
     pub fn upsert_discovered_file(&self, media_type: &str, path: &Path) {
-        let (size, mtime) = match std::fs::metadata(path) {
-            Ok(meta) => (
-                meta.len() as i64,
-                meta.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs_f64()),
-            ),
-            Err(_) => return,
+        let (size, mtime) = match crate::filesystem::size_and_mtime(path) {
+            Some(v) => v,
+            None => return,
         };
         let conn = self.lock();
         let _ = conn.execute(
@@ -601,16 +595,9 @@ fn map_import_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImportRow> {
 
 fn upsert_library_file(conn: &Connection, record: &ImportRecord, import_id: Option<i64>) {
     let output_path = PathBuf::from(&record.output_path);
-    let (size, mtime, present) = match std::fs::metadata(&output_path) {
-        Ok(meta) => (
-            Some(meta.len() as i64),
-            meta.modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs_f64()),
-            1,
-        ),
-        Err(_) => (None, None, 0),
+    let (size, mtime, present) = match crate::filesystem::size_and_mtime(&output_path) {
+        Some((size, mtime)) => (Some(size), mtime, 1),
+        None => (None, None, 0),
     };
     let _ = conn.execute(
         "INSERT INTO library_files (media_type, output_path, size, mtime, present, import_id)

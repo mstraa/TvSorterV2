@@ -75,6 +75,22 @@ fn hard_link_count(_meta: &fs::Metadata) -> u64 {
     1
 }
 
+/// Modification time as seconds since the Unix epoch, matching how mtimes are
+/// stored in the database. `None` when the platform can't report it.
+pub fn mtime_secs(meta: &fs::Metadata) -> Option<f64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+}
+
+/// Size in bytes and modification time for a file, or `None` if it can't be
+/// stat'd (e.g. it no longer exists).
+pub fn size_and_mtime(path: &Path) -> Option<(i64, Option<f64>)> {
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.len() as i64, mtime_secs(&meta)))
+}
+
 pub fn is_video_file(path: &Path) -> bool {
     if !path.is_file() {
         return false;

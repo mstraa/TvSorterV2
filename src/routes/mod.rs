@@ -18,7 +18,10 @@ use crate::importer::{preview_import, ImportRequest};
 use crate::models::*;
 use crate::parser::{parse_film_filename, ParsedMedia};
 use crate::providers::{EpisodeCandidate, ShowCandidate};
-use crate::state::{is_valid_media_type, AppState, PICKER_ROOTS};
+use crate::state::{
+    is_valid_action, is_valid_conflict_policy, is_valid_media_type, AppState, MEDIA_TYPES,
+    PICKER_ROOTS,
+};
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -108,7 +111,7 @@ fn settings_checks(input_roots: &[String], output_roots: &HashMap<String, PathBu
             write: None,
         });
     }
-    for media_type in ["tv", "anime", "film"] {
+    for &media_type in MEDIA_TYPES {
         if let Some(path) = output_roots.get(media_type) {
             checks.push(PermissionCheck {
                 label: format!("{} output: {}", title_word(media_type), path.display()),
@@ -669,10 +672,10 @@ fn build_import_requests(state: &AppState, batch: &ImportBatch) -> AppResult<Vec
     if !is_valid_media_type(&batch.media_type) {
         return Err(AppError::bad_request("Invalid media type"));
     }
-    if !matches!(batch.action.as_str(), "hardlink" | "copy" | "move" | "test") {
+    if !is_valid_action(&batch.action) {
         return Err(AppError::bad_request("Invalid action"));
     }
-    if !matches!(batch.conflict_policy.as_str(), "skip" | "replace" | "index" | "fail") {
+    if !is_valid_conflict_policy(&batch.conflict_policy) {
         return Err(AppError::bad_request("Invalid conflict policy"));
     }
     let output_root = state

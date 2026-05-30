@@ -9,6 +9,12 @@ use crate::providers::MetadataProviders;
 pub const MEDIA_TYPES: &[&str] = &["tv", "anime", "film"];
 pub const SOURCE_STATUSES: &[&str] = &["none", "imported", "failed", "skipped", "preview", "conflict"];
 pub const PICKER_ROOTS: &[&str] = &["/mnt", "/media", "/srv", "/opt", "/var/lib", "/"];
+/// Allowed import actions. The `imports.action` CHECK constraint in `db.rs`
+/// (schema + migration) must mirror this list.
+pub const IMPORT_ACTIONS: &[&str] = &["hardlink", "copy", "move", "test"];
+/// Allowed conflict policies. Mirrored by the `imports.conflict_policy` CHECK
+/// constraint in `db.rs`.
+pub const CONFLICT_POLICIES: &[&str] = &["skip", "replace", "index", "fail"];
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,7 +28,7 @@ pub struct AppState {
 impl AppState {
     pub fn output_roots(&self) -> HashMap<String, PathBuf> {
         let mut roots = HashMap::new();
-        for media_type in ["tv", "anime", "film"] {
+        for &media_type in MEDIA_TYPES {
             let key = format!("{media_type}_output_root");
             let value = self.db.get_setting(&key, "");
             if !value.is_empty() {
@@ -48,4 +54,12 @@ impl AppState {
 
 pub fn is_valid_media_type(media_type: &str) -> bool {
     MEDIA_TYPES.contains(&media_type)
+}
+
+pub fn is_valid_action(action: &str) -> bool {
+    IMPORT_ACTIONS.contains(&action)
+}
+
+pub fn is_valid_conflict_policy(policy: &str) -> bool {
+    CONFLICT_POLICIES.contains(&policy)
 }

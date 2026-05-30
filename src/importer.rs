@@ -448,11 +448,7 @@ pub fn stat_source(path: &Path) -> SourceStat {
             let (device, inode) = stat_dev_inode(&meta);
             SourceStat {
                 size: Some(meta.len() as i64),
-                mtime: meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs_f64()),
+                mtime: crate::filesystem::mtime_secs(&meta),
                 device,
                 inode,
             }

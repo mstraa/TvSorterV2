@@ -160,7 +160,8 @@ fn name_lower(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Recursively collect files under `dir` for which `keep` returns true.
+pub fn collect_files(dir: &Path, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>) {
     let read = match fs::read_dir(dir) {
         Ok(read) => read,
         Err(_) => return,
@@ -168,8 +169,8 @@ fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in read.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_files_recursive(&path, out);
-        } else if path.is_file() {
+            collect_files(&path, keep, out);
+        } else if keep(&path) {
             out.push(path);
         }
     }
@@ -186,7 +187,7 @@ fn expand_files(
         let target = resolve_under_root(root, relative_path)?;
         let mut candidates: Vec<PathBuf> = Vec::new();
         if target.is_dir() {
-            collect_files_recursive(&target, &mut candidates);
+            collect_files(&target, &|p| p.is_file(), &mut candidates);
         } else {
             candidates.push(target);
         }
@@ -279,7 +280,7 @@ pub fn expand_grouped(root: &Path, relative_paths: &[String]) -> Result<Vec<File
             let group_key = relative_path.trim_end_matches('/').to_string();
             let group_name = leaf_name(&target);
             let mut candidates: Vec<PathBuf> = Vec::new();
-            collect_files_recursive(&target, &mut candidates);
+            collect_files(&target, &|p| p.is_file(), &mut candidates);
             candidates.sort();
             for candidate in candidates {
                 if !is_video_file(&candidate) {

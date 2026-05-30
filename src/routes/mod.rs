@@ -595,7 +595,11 @@ async fn start_import_job(
     let requests = build_import_requests(&state, &batch)?;
     let rate = state.copy_rate_limit_mbps();
     let job = state.jobs.start(requests, state.db.clone(), rate);
-    Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
+    Ok(Json(snapshot_json(&job)))
+}
+
+fn snapshot_json(job: &crate::jobs::Job) -> Value {
+    serde_json::to_value(job.snapshot()).unwrap_or_else(|_| json!({}))
 }
 
 async fn list_import_jobs(State(state): State<AppState>) -> AppResult<Json<Value>> {
@@ -603,7 +607,7 @@ async fn list_import_jobs(State(state): State<AppState>) -> AppResult<Json<Value
         .jobs
         .list()
         .into_iter()
-        .map(|job| serde_json::to_value(job.snapshot()).unwrap())
+        .map(|job| snapshot_json(&job))
         .collect();
     Ok(Json(json!({ "jobs": jobs })))
 }
@@ -614,7 +618,7 @@ async fn clear_import_jobs(State(state): State<AppState>) -> AppResult<Json<Valu
         .jobs
         .list()
         .into_iter()
-        .map(|job| serde_json::to_value(job.snapshot()).unwrap())
+        .map(|job| snapshot_json(&job))
         .collect();
     Ok(Json(json!({ "cleared": cleared, "jobs": jobs })))
 }
@@ -624,7 +628,7 @@ async fn get_import_job(
     AxumPath(id): AxumPath<String>,
 ) -> AppResult<Json<Value>> {
     let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
-    Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
+    Ok(Json(snapshot_json(&job)))
 }
 
 async fn cancel_import_item(
@@ -633,7 +637,7 @@ async fn cancel_import_item(
 ) -> AppResult<Json<Value>> {
     let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
     job.request_cancel_item(index);
-    Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
+    Ok(Json(snapshot_json(&job)))
 }
 
 async fn cancel_import_job(
@@ -642,7 +646,7 @@ async fn cancel_import_job(
 ) -> AppResult<Json<Value>> {
     let job = state.jobs.get(&id).ok_or_else(|| AppError::not_found("Import job not found"))?;
     job.request_cancel();
-    Ok(Json(serde_json::to_value(job.snapshot()).unwrap()))
+    Ok(Json(snapshot_json(&job)))
 }
 
 async fn import_job_results(

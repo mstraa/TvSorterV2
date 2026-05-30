@@ -442,35 +442,52 @@ impl Database {
         .unwrap_or_default()
     }
 
-    pub fn upsert_discovered_file(&self, media_type: &str, path: &Path) {
-        let (size, mtime) = match crate::filesystem::size_and_mtime(path) {
-            Some(v) => v,
-            None => return,
+    /// Insert/refresh discovered library files for one media type in a single
+    /// transaction. Far cheaper than one autocommit per file during a rescan.
+    pub fn upsert_discovered_files(&self, media_type: &str, paths: &[PathBuf]) {
+        let mut conn = self.lock();
+        let tx = match conn.transaction() {
+            Ok(tx) => tx,
+            Err(_) => return,
         };
-        let conn = self.lock();
-        let _ = conn.execute(
-            "INSERT INTO library_files (media_type, output_path, size, mtime, present)
-             VALUES (?1, ?2, ?3, ?4, 1)
-             ON CONFLICT(output_path) DO UPDATE SET
-                size = excluded.size, mtime = excluded.mtime, present = 1, updated_at = CURRENT_TIMESTAMP",
-            params![media_type, path.to_string_lossy(), size, mtime],
-        );
+        {
+            let mut stmt = match tx.prepare(
+                "INSERT INTO library_files (media_type, output_path, size, mtime, present)
+                 VALUES (?1, ?2, ?3, ?4, 1)
+                 ON CONFLICT(output_path) DO UPDATE SET
+                    size = excluded.size, mtime = excluded.mtime, present = 1, updated_at = CURRENT_TIMESTAMP",
+            ) {
+                Ok(stmt) => stmt,
+                Err(_) => return,
+            };
+            for path in paths {
+                if let Some((size, mtime)) = crate::filesystem::size_and_mtime(path) {
+                    let _ = stmt.execute(params![media_type, path.to_string_lossy(), size, mtime]);
+                }
+            }
+        }
+        let _ = tx.commit();
     }
 
     pub fn mark_missing_outside(&self, roots: &HashMap<String, PathBuf>) {
         let rows = self.list_library_files();
-        let conn = self.lock();
+        let mut conn = self.lock();
+        let tx = match conn.transaction() {
+            Ok(tx) => tx,
+            Err(_) => return,
+        };
         for row in rows {
             let path = PathBuf::from(&row.output_path);
             if let Some(root) = roots.get(&row.media_type) {
                 if crate::filesystem::is_relative_to(&path, root) && !path.exists() {
-                    let _ = conn.execute(
+                    let _ = tx.execute(
                         "UPDATE library_files SET present = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
                         params![row.id],
                     );
                 }
             }
         }
+        let _ = tx.commit();
     }
 
     // ---- provider cache ----

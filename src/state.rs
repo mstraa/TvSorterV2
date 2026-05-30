@@ -39,7 +39,12 @@ impl AppState {
     }
 
     pub fn output_root_for(&self, media_type: &str) -> Option<PathBuf> {
-        self.output_roots().remove(media_type)
+        let value = self.db.get_setting(&format!("{media_type}_output_root"), "");
+        if value.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(value))
+        }
     }
 
     pub fn copy_rate_limit_mbps(&self) -> Option<f64> {

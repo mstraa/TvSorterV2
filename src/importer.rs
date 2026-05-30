@@ -77,6 +77,14 @@ enum CopyOutcome {
     Cancelled,
 }
 
+/// Outcome of a copy attempt, with any partial output already cleaned up. Lets
+/// the `copy` and `move` actions share identical cancel/failure handling.
+enum CopyStep {
+    Done,
+    Cancelled,
+    Failed(std::io::Error),
+}
+
 pub fn build_destination(request: &ImportRequest) -> PathBuf {
     if request.media_type == "film" {
         film_destination_path(
@@ -189,13 +197,7 @@ pub fn execute_import(
     }
 
     if cancelled(cancel) {
-        return ImportResult::with_error(
-            request,
-            output_path,
-            final_path,
-            "cancelled",
-            "Import cancelled.".to_string(),
-        );
+        return cancelled_result(request, output_path, final_path);
     }
 
     if let Some(parent) = final_path.parent() {
@@ -212,13 +214,7 @@ pub fn execute_import(
     match action.as_str() {
         "hardlink" => {
             if cancelled(cancel) {
-                return ImportResult::with_error(
-                    request,
-                    output_path,
-                    final_path,
-                    "cancelled",
-                    "Import cancelled.".to_string(),
-                );
+                return cancelled_result(request, output_path, final_path);
             }
             if let Err(err) = fs::hard_link(&request.source_path, &final_path) {
                 if err.raw_os_error() == Some(EXDEV) {
@@ -237,66 +233,48 @@ pub fn execute_import(
                 progress(1, 1);
             }
         }
-        "copy" => {
-            match copy_with_progress(
-                &request.source_path,
-                &final_path,
-                progress,
-                copy_rate_limit_mbps,
-                cancel,
-            ) {
-                Ok(CopyOutcome::Cancelled) => {
-                    remove_partial(&final_path);
-                    return ImportResult::with_error(
-                        request,
-                        output_path,
-                        final_path,
-                        "cancelled",
-                        "Import cancelled.".to_string(),
-                    );
-                }
-                Ok(CopyOutcome::Done) => {}
-                Err(err) => {
-                    remove_partial(&final_path);
-                    return io_failure(request, output_path, final_path, &err);
-                }
-            }
-        }
+        "copy" => match copy_step(
+            &request.source_path,
+            &final_path,
+            progress,
+            copy_rate_limit_mbps,
+            cancel,
+        ) {
+            CopyStep::Done => {}
+            CopyStep::Cancelled => return cancelled_result(request, output_path, final_path),
+            CopyStep::Failed(err) => return io_failure(request, output_path, final_path, &err),
+        },
         "move" => {
             // Try rename first (same filesystem, atomic and instant).
-            if let Err(rename_err) = fs::rename(&request.source_path, &final_path) {
-                if rename_err.raw_os_error() == Some(EXDEV) {
-                    // Cross-device: copy then delete source.
-                    match copy_with_progress(
+            match fs::rename(&request.source_path, &final_path) {
+                Ok(()) => {
+                    if let Some(progress) = progress {
+                        progress(1, 1);
+                    }
+                }
+                // Cross-device: copy then delete the source.
+                Err(rename_err) if rename_err.raw_os_error() == Some(EXDEV) => {
+                    match copy_step(
                         &request.source_path,
                         &final_path,
                         progress,
                         copy_rate_limit_mbps,
                         cancel,
                     ) {
-                        Ok(CopyOutcome::Cancelled) => {
-                            remove_partial(&final_path);
-                            return ImportResult::with_error(
-                                request,
-                                output_path,
-                                final_path,
-                                "cancelled",
-                                "Import cancelled.".to_string(),
-                            );
-                        }
-                        Ok(CopyOutcome::Done) => {
+                        CopyStep::Done => {
                             let _ = fs::remove_file(&request.source_path);
                         }
-                        Err(err) => {
-                            remove_partial(&final_path);
-                            return io_failure(request, output_path, final_path, &err);
+                        CopyStep::Cancelled => {
+                            return cancelled_result(request, output_path, final_path)
+                        }
+                        CopyStep::Failed(err) => {
+                            return io_failure(request, output_path, final_path, &err)
                         }
                     }
-                } else {
-                    return io_failure(request, output_path, final_path, &rename_err);
                 }
-            } else if let Some(progress) = progress {
-                progress(1, 1);
+                Err(rename_err) => {
+                    return io_failure(request, output_path, final_path, &rename_err)
+                }
             }
         }
         other => {
@@ -315,6 +293,43 @@ pub fn execute_import(
 
 fn cancelled(cancel: Option<CancelFn<'_>>) -> bool {
     cancel.map(|c| c()).unwrap_or(false)
+}
+
+/// Build the standard "cancelled" result for an aborted import.
+fn cancelled_result(
+    request: ImportRequest,
+    output_path: PathBuf,
+    final_path: PathBuf,
+) -> ImportResult {
+    ImportResult::with_error(
+        request,
+        output_path,
+        final_path,
+        "cancelled",
+        "Import cancelled.".to_string(),
+    )
+}
+
+/// Copy `source` to `final_path`, cleaning up any partial output on
+/// cancellation or failure. Shared by the `copy` and `move` actions.
+fn copy_step(
+    source: &Path,
+    final_path: &Path,
+    progress: Option<ProgressFn<'_>>,
+    copy_rate_limit_mbps: Option<f64>,
+    cancel: Option<CancelFn<'_>>,
+) -> CopyStep {
+    match copy_with_progress(source, final_path, progress, copy_rate_limit_mbps, cancel) {
+        Ok(CopyOutcome::Done) => CopyStep::Done,
+        Ok(CopyOutcome::Cancelled) => {
+            remove_partial(final_path);
+            CopyStep::Cancelled
+        }
+        Err(err) => {
+            remove_partial(final_path);
+            CopyStep::Failed(err)
+        }
+    }
 }
 
 fn copy_with_progress(

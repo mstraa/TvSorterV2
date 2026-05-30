@@ -75,7 +75,7 @@ export default function App() {
           <div className="sidebar-bottom">
             <div className="connection live">
               <span className="connection-dot" />
-              LAN · hardlink / copy
+              LAN · hardlink / copy / move
             </div>
             <button
               className="secondary-button theme-toggle"

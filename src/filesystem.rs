@@ -23,6 +23,8 @@ pub struct BrowserEntry {
     pub is_dir: bool,
     pub size: Option<i64>,
     pub is_video: bool,
+    /// True when the file has more than one hard link (nlink > 1 on Unix).
+    pub is_hardlink: bool,
 }
 
 /// Lexically normalize an absolute-ish path, resolving `.` and `..` without
@@ -60,6 +62,17 @@ pub fn resolve_under_root(root: &Path, relative_path: &str) -> Result<PathBuf, F
         return Err(FsError::OutsideRoot);
     }
     Ok(target)
+}
+
+#[cfg(unix)]
+fn hard_link_count(meta: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink()
+}
+
+#[cfg(not(unix))]
+fn hard_link_count(_meta: &fs::Metadata) -> u64 {
+    1
 }
 
 pub fn is_video_file(path: &Path) -> bool {
@@ -104,6 +117,7 @@ pub fn list_directory(root: &Path, relative_path: &str) -> Result<Vec<BrowserEnt
             Err(_) => continue,
         };
         let is_dir = metadata.is_dir();
+        let is_hardlink = !is_dir && hard_link_count(&metadata) > 1;
         entries.push(BrowserEntry {
             name: child
                 .file_name()
@@ -118,6 +132,7 @@ pub fn list_directory(root: &Path, relative_path: &str) -> Result<Vec<BrowserEnt
                 Some(metadata.len() as i64)
             },
             is_video: is_video_file(&child),
+            is_hardlink,
         });
     }
     Ok(entries)

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
+import { useImports } from "../components/ImportsContext";
 import { useProgress } from "../components/Progress";
 import Select from "../components/Select";
-import type { BrowseResponse, MediaType } from "../types";
+import type { BrowseEntry, BrowseResponse, MediaType } from "../types";
 
 const STATUS_FILTERS = [
   { value: "none", label: "Only no status" },
@@ -27,6 +28,8 @@ export default function BrowsePage() {
   const rootIdParam = searchParams.get("root_id");
   const rootId = rootIdParam ? Number(rootIdParam) : null;
   const path = searchParams.get("path") ?? "";
+
+  const { jobs } = useImports();
 
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [mediaType, setMediaType] = useState<MediaType>("tv");
@@ -60,6 +63,32 @@ export default function BrowsePage() {
     );
   }, [data, statusFilter]);
 
+  const pendingPaths = useMemo(() => {
+    const set = new Set<string>();
+    for (const job of jobs) {
+      if (!job.active) continue;
+      for (const item of job.items) {
+        if (item.status === "queued" || item.status === "running") {
+          set.add(item.source_path);
+        }
+      }
+    }
+    return set;
+  }, [jobs]);
+
+  function isPending(entry: BrowseEntry): boolean {
+    if (!data?.active_root || pendingPaths.size === 0) return false;
+    const abs = `${data.active_root.path}/${entry.relative_path}`;
+    if (entry.is_dir) {
+      const prefix = abs + "/";
+      for (const p of pendingPaths) {
+        if (p.startsWith(prefix)) return true;
+      }
+      return false;
+    }
+    return pendingPaths.has(abs);
+  }
+
   function toggle(relativePath: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -82,15 +111,19 @@ export default function BrowsePage() {
 
   function matchSelected() {
     if (!data?.active_root) return;
-    if (selected.size === 0) {
-      alert("Select one or more files or folders first.");
+    const matchable = [...selected].filter((relPath) => {
+      const entry = data.entries.find((e) => e.relative_path === relPath);
+      return !entry?.is_hardlink;
+    });
+    if (matchable.length === 0) {
+      alert("Select one or more files or folders first (hardlinks are excluded).");
       return;
     }
     navigate("/match", {
       state: {
         rootId: data.active_root.id,
         mediaType,
-        selected: [...selected],
+        selected: matchable,
       },
     });
   }
@@ -224,47 +257,59 @@ export default function BrowsePage() {
           </tr>
         </thead>
         <tbody>
-          {visibleEntries.map((entry) => (
-            <tr
-              key={entry.relative_path}
-              className={`browse-row ${entry.status ? `state-row state-${entry.status}` : ""} ${
-                selected.has(entry.relative_path) ? "selected-row" : ""
-              }`}
-              onClick={(e) => {
-                const target = e.target as HTMLElement;
-                if (target.closest("a, button, input, select, label")) return;
-                toggle(entry.relative_path);
-              }}
-            >
-              <td>
-                <input
-                  type="checkbox"
-                  checked={selected.has(entry.relative_path)}
-                  onChange={() => toggle(entry.relative_path)}
-                />
-              </td>
-              <td className="browse-name-cell">
-                {entry.is_dir ? (
-                  <button
-                    className="link-button"
-                    type="button"
-                    onClick={() => openFolder(entry.relative_path)}
-                  >
-                    {entry.name}
-                  </button>
-                ) : (
-                  entry.name
-                )}
-              </td>
-              <td className="nowrap-cell">
-                {entry.status && <span className={`state-badge state-${entry.status}`}>{entry.status}</span>}
-              </td>
-              <td className="nowrap-cell">
-                {entry.is_dir ? "folder" : entry.is_video ? "video" : "file"}
-              </td>
-              <td className="nowrap-cell">{entry.size_human}</td>
-            </tr>
-          ))}
+          {visibleEntries.map((entry) => {
+            const pending = isPending(entry);
+            return (
+              <tr
+                key={entry.relative_path}
+                className={`browse-row ${entry.status ? `state-row state-${entry.status}` : ""} ${
+                  pending ? "state-row state-pending" : ""
+                } ${selected.has(entry.relative_path) ? "selected-row" : ""}`}
+                onClick={(e) => {
+                  const target = e.target as HTMLElement;
+                  if (target.closest("a, button, input, select, label")) return;
+                  toggle(entry.relative_path);
+                }}
+              >
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(entry.relative_path)}
+                    onChange={() => toggle(entry.relative_path)}
+                  />
+                </td>
+                <td className="browse-name-cell">
+                  {entry.is_dir ? (
+                    <button
+                      className="link-button"
+                      type="button"
+                      onClick={() => openFolder(entry.relative_path)}
+                    >
+                      {entry.name}
+                    </button>
+                  ) : (
+                    entry.name
+                  )}
+                </td>
+                <td className="nowrap-cell">
+                  {pending && <span className="state-badge state-pending">pending</span>}
+                  {!pending && entry.status && (
+                    <span className={`state-badge state-${entry.status}`}>{entry.status}</span>
+                  )}
+                </td>
+                <td className="nowrap-cell">
+                  {entry.is_dir
+                    ? "folder"
+                    : entry.is_hardlink
+                    ? <span className="state-badge state-hardlink">hardlink</span>
+                    : entry.is_video
+                    ? "video"
+                    : "file"}
+                </td>
+                <td className="nowrap-cell">{entry.size_human}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>

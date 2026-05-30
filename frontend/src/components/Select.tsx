@@ -76,7 +76,8 @@ export default function Select({
               className={`select-option${option.value === value ? " selected" : ""}${
                 option.disabled ? " disabled" : ""
               }`}
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 if (option.disabled) return;
                 onChange(option.value);
                 setOpen(false);

@@ -187,6 +187,7 @@ async fn browse(
                         relative_path: entry.relative_path,
                         is_dir: entry.is_dir,
                         is_video: entry.is_video,
+                        is_hardlink: entry.is_hardlink,
                         size: entry.size,
                         size_human: human_file_size(entry.size),
                         status: status.status,

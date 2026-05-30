@@ -26,6 +26,7 @@ export interface BrowseEntry {
   relative_path: string;
   is_dir: boolean;
   is_video: boolean;
+  is_hardlink: boolean;
   size: number | null;
   size_human: string;
   status: string | null;
@@ -127,6 +128,7 @@ export interface PreviewResult {
 export interface JobItem {
   index: number;
   name: string;
+  source_path: string;
   destination: string;
   status: string;
   bytes: number;

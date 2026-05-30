@@ -262,6 +262,43 @@ pub fn execute_import(
                 }
             }
         }
+        "move" => {
+            // Try rename first (same filesystem, atomic and instant).
+            if let Err(rename_err) = fs::rename(&request.source_path, &final_path) {
+                if rename_err.raw_os_error() == Some(EXDEV) {
+                    // Cross-device: copy then delete source.
+                    match copy_with_progress(
+                        &request.source_path,
+                        &final_path,
+                        progress,
+                        copy_rate_limit_mbps,
+                        cancel,
+                    ) {
+                        Ok(CopyOutcome::Cancelled) => {
+                            remove_partial(&final_path);
+                            return ImportResult::with_error(
+                                request,
+                                output_path,
+                                final_path,
+                                "cancelled",
+                                "Import cancelled.".to_string(),
+                            );
+                        }
+                        Ok(CopyOutcome::Done) => {
+                            let _ = fs::remove_file(&request.source_path);
+                        }
+                        Err(err) => {
+                            remove_partial(&final_path);
+                            return io_failure(request, output_path, final_path, &err);
+                        }
+                    }
+                } else {
+                    return io_failure(request, output_path, final_path, &rename_err);
+                }
+            } else if let Some(progress) = progress {
+                progress(1, 1);
+            }
+        }
         other => {
             return ImportResult::with_error(
                 request,
@@ -447,7 +484,7 @@ fn stat_dev_inode(_meta: &fs::Metadata) -> (Option<i64>, Option<i64>) {
 /// Number of progress "units" an import contributes: byte count for copies,
 /// 1 for instant actions.
 pub fn import_request_units(request: &ImportRequest) -> u64 {
-    if request.action == "copy" {
+    if request.action == "copy" || request.action == "move" {
         fs::metadata(&request.source_path)
             .map(|m| m.len().max(1))
             .unwrap_or(1)

@@ -337,6 +337,7 @@ export default function MatchPage() {
                 options={[
                   { value: "copy", label: "Copy" },
                   { value: "hardlink", label: "Hardlink" },
+                  { value: "move", label: "Move" },
                   { value: "test", label: "Test" },
                 ]}
               />

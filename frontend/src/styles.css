@@ -686,6 +686,19 @@ tbody tr:hover {
   color: var(--purple);
   background: rgba(180, 138, 214, 0.08);
 }
+.state-badge.state-hardlink {
+  border-color: var(--line-strong);
+  color: var(--faint);
+  background: var(--panel-2);
+}
+.state-badge.state-pending {
+  border-color: rgba(240, 178, 77, 0.45);
+  color: var(--amber);
+  background: rgba(240, 178, 77, 0.08);
+}
+.state-row.state-pending td:first-child {
+  box-shadow: inset 3px 0 0 var(--amber);
+}
 
 /* subtle left marker on state rows */
 .state-row.state-imported td:first-child {

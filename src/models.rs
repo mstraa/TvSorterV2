@@ -49,6 +49,7 @@ pub struct BrowseEntry {
     pub relative_path: String,
     pub is_dir: bool,
     pub is_video: bool,
+    pub is_hardlink: bool,
     pub size: Option<i64>,
     pub size_human: String,
     pub status: Option<String>,

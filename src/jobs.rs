@@ -17,6 +17,7 @@ use crate::importer::{
 pub struct JobItem {
     pub index: usize,
     pub name: String,
+    pub source_path: String,
     pub destination: String,
     pub status: String,
     pub bytes: u64,
@@ -74,6 +75,7 @@ fn build_item(index: usize, request: &ImportRequest) -> JobItem {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
+        source_path: request.source_path.to_string_lossy().to_string(),
         // Planned destination name, shown before the copy runs; updated to the
         // actual final path once the file completes.
         destination: build_destination(request)

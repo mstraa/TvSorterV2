@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS imports (
     episode_number INTEGER NOT NULL,
     episode_title TEXT NOT NULL,
     quality TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('hardlink', 'copy', 'test')),
+    action TEXT NOT NULL CHECK (action IN ('hardlink', 'copy', 'move', 'test')),
     conflict_policy TEXT NOT NULL CHECK (conflict_policy IN ('skip', 'replace', 'index', 'fail')),
     result TEXT NOT NULL,
     error TEXT,
@@ -154,6 +154,7 @@ impl Database {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(SCHEMA)?;
+        migrate_imports_action_check(&conn)?;
         Ok(Self {
             path: path.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
@@ -484,6 +485,65 @@ impl Database {
             params![key, serialized],
         );
     }
+}
+
+/// Older databases created the `imports` table with a CHECK constraint that
+/// only allowed ('hardlink', 'copy', 'test'). Rebuild the table so the 'move'
+/// action is accepted. No-op on fresh databases or ones already migrated.
+fn migrate_imports_action_check(conn: &Connection) -> DbResult<()> {
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'imports'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let needs_migration = match sql {
+        Some(definition) => !definition.contains("'move'"),
+        None => false,
+    };
+    if !needs_migration {
+        return Ok(());
+    }
+
+    // SQLite can't ALTER a CHECK constraint, so recreate the table and copy rows.
+    // library_files.import_id references imports(id); ids are preserved by the
+    // copy, so disable FK enforcement during the swap to avoid spurious errors.
+    conn.execute_batch(
+        r#"
+PRAGMA foreign_keys = OFF;
+BEGIN;
+ALTER TABLE imports RENAME TO imports_legacy;
+CREATE TABLE imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_path TEXT NOT NULL,
+    source_size INTEGER,
+    source_mtime REAL,
+    source_device INTEGER,
+    source_inode INTEGER,
+    output_path TEXT NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('tv', 'anime', 'film')),
+    provider TEXT,
+    provider_show_id TEXT,
+    show_title TEXT NOT NULL,
+    show_year INTEGER,
+    season_number INTEGER NOT NULL,
+    episode_number INTEGER NOT NULL,
+    episode_title TEXT NOT NULL,
+    quality TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('hardlink', 'copy', 'move', 'test')),
+    conflict_policy TEXT NOT NULL CHECK (conflict_policy IN ('skip', 'replace', 'index', 'fail')),
+    result TEXT NOT NULL,
+    error TEXT,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO imports SELECT * FROM imports_legacy;
+DROP TABLE imports_legacy;
+COMMIT;
+PRAGMA foreign_keys = ON;
+"#,
+    )?;
+    Ok(())
 }
 
 fn map_import_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImportRow> {

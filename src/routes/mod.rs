@@ -652,7 +652,7 @@ fn build_import_requests(state: &AppState, batch: &ImportBatch) -> AppResult<Vec
     if !is_valid_media_type(&batch.media_type) {
         return Err(AppError::bad_request("Invalid media type"));
     }
-    if !matches!(batch.action.as_str(), "hardlink" | "copy" | "test") {
+    if !matches!(batch.action.as_str(), "hardlink" | "copy" | "move" | "test") {
         return Err(AppError::bad_request("Invalid action"));
     }
     if !matches!(batch.conflict_policy.as_str(), "skip" | "replace" | "index" | "fail") {

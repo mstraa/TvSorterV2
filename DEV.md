@@ -23,7 +23,8 @@ Feature target: full parity with V1 plus the documented V1 "Known Gaps" closed.
 
 ```
 src/
-  main.rs        server bootstrap, CORS, tracing
+  lib.rs         library crate: build_app/serve/spawn_embedded, CORS, tracing
+  main.rs        server binary: thin wrapper over tvsorter::serve (LXC/systemd)
   config.rs      env config
   state.rs       AppState (config, db, providers, jobs), output-root helpers
   db.rs          rusqlite schema + queries (Arc<Mutex<Connection>>)
@@ -40,8 +41,16 @@ src/
   assets.rs      embedded SPA serving + fallback
   routes/mod.rs  all HTTP handlers + router
 frontend/        React + TS SPA (pages: Browse, Match, Results, Library, History, Settings)
-scripts/         create-proxmox-lxc.sh, update-tvsorter.sh, tvsorter-access.sh, build-app.sh
+src-tauri/       desktop app (Tauri) — embeds the server via tvsorter::spawn_embedded
+scripts/         create-proxmox-lxc.sh, update-tvsorter.sh, tvsorter-access.sh, build-app.sh, build-desktop.sh
 ```
+
+The server lives in the `tvsorter` library crate. Two front-ends reuse it:
+- `src/main.rs` — long-lived server for the LXC / systemd deployment (priority).
+- `src-tauri` — native desktop app (macOS/Windows/Linux). It calls
+  `tvsorter::spawn_embedded()` to run the same axum server on a loopback port,
+  then points a webview at it. `src-tauri` is a *separate* crate (not a workspace
+  member), so the LXC build never compiles Tauri.
 
 ## Status
 
@@ -57,6 +66,7 @@ scripts/         create-proxmox-lxc.sh, update-tvsorter.sh, tvsorter-access.sh, 
 - [x] React SPA: Browse, Match (manual search + apply-to-row/all + episode dropdown), Preview, Results (state filter), Library, History, Settings (folder picker), dark theme, delayed progress overlay.
 - [x] Provider episode dropdown (gap closed).
 - [x] Multi-season anime: episode-number fallback match when season differs (gap mitigated).
+- [x] Desktop app (Tauri) via embedded server: src-tauri crate, shared codebase, LXC build untouched.
 - [x] Proxmox LXC creation/update/access scripts adapted for Rust+Node build-from-source.
 - [x] Backend unit tests (parser, naming, filesystem, formatting, ffprobe mapping, importer).
 - [x] End-to-end smoke test verified (settings → browse → match w/ live TVMaze → import → results → library → history → preview conflict → source-status → folders → embedded SPA).

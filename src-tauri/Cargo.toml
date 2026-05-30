@@ -1,0 +1,21 @@
+[package]
+name = "tvsorter-desktop"
+version = "0.2.0"
+edition = "2021"
+description = "TvSorter desktop app — embeds the TvSorter server in a native window"
+license = "MIT"
+
+# Standalone crate (NOT part of the root crate / not a workspace member), so the
+# LXC build (`cargo build --release` at the repo root) never compiles Tauri or
+# pulls in its system webview dependencies.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tvsorter = { path = ".." }
+
+[profile.release]
+opt-level = 2
+lto = "thin"

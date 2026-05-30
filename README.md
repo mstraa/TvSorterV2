@@ -99,6 +99,38 @@ cargo test            # backend unit tests
 cd frontend && npm run build   # type-check + bundle the frontend
 ```
 
+## Desktop app (Tauri)
+
+The primary deployment target is the Proxmox LXC server above. As an **optional,
+standalone deliverable**, TvSorter can also be packaged as a native desktop app
+for macOS, Windows, and Linux.
+
+It uses an **embedded-server** design: the desktop app starts the *same* axum
+server on a loopback port (`127.0.0.1:<random>`) and shows it in a native
+webview. No HTTP handler is rewritten — the server and the desktop app share one
+codebase (the `tvsorter` library crate). The desktop crate (`src-tauri/`) is a
+separate Cargo crate, so the LXC build (`cargo build --release` at the repo root)
+never compiles Tauri or pulls in its system webview dependencies.
+
+Requires the Tauri CLI (`cargo install tauri-cli --version '^2'`) plus the
+platform build prerequisites (see <https://tauri.app/start/prerequisites/>):
+WebKitGTK on Linux, Xcode Command Line Tools on macOS, MSVC + WebView2 on Windows.
+
+```sh
+scripts/build-desktop.sh        # bundle for the current OS
+# or directly:
+cargo tauri build               # artifacts in src-tauri/target/release/bundle/
+cargo tauri dev                 # run the desktop app for development
+```
+
+Cross-OS bundles are produced by building on each target OS (macOS → `.app`/`.dmg`,
+Windows → `.msi`/`.exe`, Linux → `.deb`/`.AppImage`).
+
+> **Note:** the app browses the *local* machine's filesystem. The folder-picker
+> roots and hardlink semantics are tuned for a Linux media server; on a desktop
+> Mac/Windows the relevant media usually lives on a NAS, so the desktop app is
+> most useful pointed at locally-mounted media.
+
 ## Configuration
 
 Environment variables:

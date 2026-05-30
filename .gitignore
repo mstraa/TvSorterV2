@@ -1,4 +1,6 @@
 /target
+src-tauri/target
+src-tauri/gen
 **/*.rs.bk
 .local-data/
 frontend/node_modules/

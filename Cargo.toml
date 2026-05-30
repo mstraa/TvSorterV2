@@ -1,9 +1,13 @@
 [package]
 name = "tvsorter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "LAN-only TV, anime, and film hardlink/copy sorter (Rust backend)"
 license = "MIT"
+
+[lib]
+name = "tvsorter"
+path = "src/lib.rs"
 
 [[bin]]
 name = "tvsorter"

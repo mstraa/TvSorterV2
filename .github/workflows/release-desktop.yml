@@ -1,0 +1,94 @@
+name: Release desktop apps
+
+# Builds the TvSorter Tauri desktop app for macOS, Windows, and Linux and
+# attaches the installers to a GitHub release.
+#
+# Triggers:
+#   - pushing a tag like `v0.2.0`  -> builds and creates/updates the release
+#   - manual run (workflow_dispatch) with an explicit tag input
+#
+# NOTE: builds are UNSIGNED for now (no Apple/Windows code-signing secrets).
+# macOS users will see a Gatekeeper warning; Windows users a SmartScreen prompt.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.2.0). Must already exist.'
+        required: true
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+            rust-targets: ''
+          - platform: windows-latest
+            args: ''
+            rust-targets: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl wget file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'TvSorter ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseBody: |
+            TvSorter desktop builds (unsigned).
+
+            - macOS: `.dmg` (universal — Apple Silicon + Intel)
+            - Windows: `.msi` / `.exe`
+            - Linux: `.deb` / `.AppImage`
+
+            > Unsigned: macOS Gatekeeper / Windows SmartScreen will warn on first launch.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

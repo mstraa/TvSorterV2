@@ -167,8 +167,11 @@ async fn browse(
                 let mut all_sources: Vec<PathBuf> = Vec::new();
                 for entry in &listed {
                     let sources = if entry.is_dir {
-                        let mut present = expand_source_files(&root_path, &[entry.relative_path.clone()])
-                            .unwrap_or_default();
+                        let mut present = expand_source_files(
+                            &root_path,
+                            std::slice::from_ref(&entry.relative_path),
+                        )
+                        .unwrap_or_default();
                         // Files imported from this folder and then moved out of
                         // the input tree no longer exist to be listed, but the
                         // folder should still reflect that they were imported.

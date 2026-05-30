@@ -515,7 +515,6 @@ pub fn import_request_units(request: &ImportRequest) -> u64 {
 mod tests {
     use super::*;
     use std::fs::File;
-    use std::io::Write as _;
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("tvsorter-imp-{}", uuid::Uuid::new_v4()));

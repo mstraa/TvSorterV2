@@ -239,7 +239,7 @@ impl JobManager {
     pub fn list(&self) -> Vec<Arc<Job>> {
         let mut jobs: Vec<Arc<Job>> =
             self.jobs.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        jobs.sort_by(|a, b| b.seq.cmp(&a.seq));
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.seq));
         jobs
     }
 

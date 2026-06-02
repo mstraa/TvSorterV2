@@ -237,6 +237,15 @@ export default function BrowsePage() {
               Up one folder
             </button>
           )}
+          <button
+            className="icon-button pathbar-refresh"
+            type="button"
+            onClick={load}
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            ↻
+          </button>
         </div>
       </div>
 

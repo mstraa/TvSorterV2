@@ -541,6 +541,10 @@ button:disabled {
   font-size: 12px;
 }
 
+.pathbar-refresh {
+  margin-left: auto;
+}
+
 /* ---- Tables ---- */
 
 table {
